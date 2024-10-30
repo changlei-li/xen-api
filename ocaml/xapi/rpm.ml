@@ -52,7 +52,7 @@ module Pkg = struct
 
   type order = LT | EQ | GT
 
-  type version_segment = Int of int | Str of string
+  type version_segment = Int of int | Str of string | Tilde
 
   let string_of_order = function LT -> "<" | EQ -> "=" | GT -> ">"
 
@@ -64,6 +64,8 @@ module Pkg = struct
       Re.execp r str
     in
     match s with
+    | "~" ->
+        Tilde
     | _ when is_all_number s -> (
       try Int (int_of_string s) with _ -> Str s
     )
@@ -177,10 +179,16 @@ module Pkg = struct
         Int.compare i1 i2 |> order_of_int
     | Str s1, Str s2 ->
         String.compare s1 s2 |> order_of_int
+    | Tilde, Tilde ->
+        EQ
     | Int _, Str _ ->
         GT
     | Str _, Int _ ->
         LT
+    | Tilde, _ ->
+        LT
+    | _, Tilde ->
+        GT
 
   let split_version_string s =
     let r = Re.Posix.compile_pat {|([0-9]+|[a-zA-Z]+|~)|} in
@@ -224,6 +232,12 @@ module Pkg = struct
      *  "2a" "<" "2b"
      *  "1.0" ">" "1.xs2"
      *  "1.0_xs" "=" "1.0.xs"
+     *  "1.xs8" ">" "1.xs8~2_1"
+     *  "1.2.3" ">" "1.2.3~beta"
+     * Some corner cases that don't follow standard RPM versioning conventions
+     * with tilde:
+     *  "1.2.3~rc1~beta" "<" "1.2.3~rc1"
+     *  "1.2.3~" "<" "1.2.3"
      *)
     let rec compare_segments l1 l2 =
       match (l1, l2) with
@@ -234,6 +248,10 @@ module Pkg = struct
         | r ->
             r
       )
+      | Tilde :: _, [] ->
+          LT
+      | [], Tilde :: _ ->
+          GT
       | _ :: _, [] ->
           GT
       | [], _ :: _ ->
