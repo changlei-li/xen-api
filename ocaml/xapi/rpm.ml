@@ -58,20 +58,6 @@ module Pkg = struct
 
   let order_of_int = function 0 -> EQ | r when r > 0 -> GT | _ -> LT
 
-  let version_segment_of_string s =
-    let is_all_number str =
-      let r = Re.Posix.compile_pat {|^[0-9]+$|} in
-      Re.execp r str
-    in
-    match s with
-    | "~" ->
-        Tilde
-    | _ when is_all_number s -> (
-      try Int (int_of_string s) with _ -> Str s
-    )
-    | _ ->
-        Str s
-
   let error_msg = Printf.sprintf "Failed to parse '%s'"
 
   let parse_epoch_version_release epoch_ver_rel =
@@ -191,23 +177,18 @@ module Pkg = struct
         GT
 
   let split_version_string s =
-    let r = Re.Posix.compile_pat {|([0-9]+|[a-zA-Z]+|~)|} in
-    let len = String.length s in
-    let rec aux acc pos =
-      if pos >= len then
-        List.rev acc
-      else
-        match Re.exec_opt ~pos r s with
-        | Some groups ->
-            let matched = Re.Group.get groups 0 in
-            let next_pos = Re.Group.stop groups 0 in
-            aux (matched :: acc) next_pos
-        | None ->
-            List.rev acc
-    in
-    aux [] 0
+    let r = Re.Posix.compile_pat {|[a-zA-Z]+|[0-9]+|~|} in
+    s |> Re.all r |> List.map (fun g -> Re.Group.get g 0)
 
-  let normalize v = split_version_string v |> List.map version_segment_of_string
+  let normalize v =
+    let version_segment_of_string = function
+      | "~" ->
+          Tilde
+      | s -> (
+        try Int (int_of_string s) with _ -> Str s
+      )
+    in
+    v |> split_version_string |> List.map version_segment_of_string
 
   let compare_version_strings s1 s2 =
     (* Compare versions or releases of RPM packages
