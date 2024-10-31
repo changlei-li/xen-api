@@ -176,9 +176,9 @@ module Pkg = struct
     | _, Tilde ->
         GT
 
-  let split_version_string s =
+  let split_version_string =
     let r = Re.Posix.compile_pat {|[a-zA-Z]+|[0-9]+|~|} in
-    s |> Re.all r |> List.map (fun g -> Re.Group.get g 0)
+    fun s -> s |> Re.all r |> List.map (fun g -> Re.Group.get g 0)
 
   let normalize v =
     let version_segment_of_string = function
