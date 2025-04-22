@@ -35,18 +35,95 @@ let write_config () =
     try Network_config.write_config !config
     with Network_config.Write_error -> ()
 
-let read_config () =
+let sort_and_update () =
+  if Network_utils.is_sorted_by_script () then
+    ()
+  else
+    let last_config = !config in
+    let last_interface_order =
+      Option.value ~default:[] last_config.interface_order
+    in
+    match Network_device_order.sort last_interface_order with
+    | Ok (new_order, changed_interfaces) ->
+        let bridge_config =
+          List.map
+            (fun (bridge, bridge_conf) ->
+              ( bridge
+              , {
+                  bridge_conf with
+                  ports=
+                    List.map
+                      (fun (port, port_conf) ->
+                        ( port
+                        , {
+                            port_conf with
+                            interfaces=
+                              List.map
+                                (fun iface ->
+                                  match
+                                    List.assoc_opt iface changed_interfaces
+                                  with
+                                  | Some new_name ->
+                                      new_name
+                                  | None ->
+                                      iface
+                                )
+                                port_conf.interfaces
+                          }
+                        )
+                      )
+                      bridge_conf.ports
+                }
+              )
+            )
+            last_config.bridge_config
+        in
+        let interface_config =
+          List.map
+            (fun (name, conf) ->
+              match List.assoc_opt name changed_interfaces with
+              | Some new_name ->
+                  (new_name, conf)
+              | None ->
+                  (name, conf)
+            )
+            last_config.interface_config
+        in
+        config :=
+          {
+            last_config with
+            interface_config
+          ; bridge_config
+          ; interface_order= Some new_order
+          }
+    | Error err ->
+        error "Failed to sort interface order"
+
+let sort_on_first_boot () =
+  if Network_utils.is_sorted_by_script () then
+    None
+  else
+    match Network_device_order.sort [] with
+    | Ok (sorted, _) ->
+        Some sorted
+    | Error err ->
+        error "Failed to sort interface order" ;
+        Some []
+
+let build_config () =
   try
     config := Network_config.read_config () ;
-    debug "Read configuration from networkd.db file."
+    debug "Read configuration from networkd.db file." ;
+    sort_and_update ()
   with Network_config.Read_error -> (
     try
       (* No configuration file found. Try to get the initial network setup from
        * the first-boot data written by the host installer. *)
-      config := Network_config.read_management_conf () ;
+      let interface_order = sort_on_first_boot () in
+      config := Network_config.read_management_conf interface_order ;
       debug "Read configuration from management.conf file."
     with Network_config.Read_error ->
-      debug "Could not interpret the configuration in management.conf"
+      error "Could not interpret the configuration in management.conf"
   )
 
 let on_shutdown signal =
@@ -69,7 +146,9 @@ let sync_state () =
   write_lock := false ;
   write_config ()
 
-let reset_state () = config := Network_config.read_management_conf ()
+let reset_state () =
+  let interface_order = sort_on_first_boot () in
+  config := Network_config.read_management_conf interface_order
 
 let set_gateway_interface _dbg name =
   (* Remove dhclient conf (if any) for the old and new gateway interfaces.
@@ -1571,7 +1650,7 @@ let on_startup () =
       in
       try
         (* the following is best-effort *)
-        read_config () ;
+        build_config () ;
         remove_centos_config () ;
         if !backend_kind = Openvswitch then
           Ovs.set_max_idle 5000 ;

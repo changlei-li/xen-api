@@ -147,6 +147,10 @@ let fork_script ?on_error ?log script args =
   in
   check_n_run ?on_error ?log fork_script_internal script args
 
+let is_sorted_by_script () =
+  let dir = "/etc/sysconfig/network-scripts/interface-rename-data" in
+  Sys.file_exists dir && Sys.is_directory dir
+
 module Sysfs = struct
   let list_pci_drivers () =
     try Array.to_list (Sys.readdir "/sys/bus/pci/drivers")
