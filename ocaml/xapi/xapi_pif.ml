@@ -58,16 +58,17 @@ let make_tables ~__context ~host =
   let dbg = Context.string_of_task __context in
   let device_to_position_table = Net.Interface.get_interface_positions dbg () in
   let device_to_mac_table =
-    let devices =
-      List.filter
-        (fun name -> Net.Interface.is_physical dbg name)
-        (Net.Interface.get_all dbg ())
-    in
-    List.combine devices
-      (List.map (fun name -> Net.Interface.get_mac dbg name) devices)
+    List.filter_map
+      (fun name ->
+        if Net.Interface.is_physical dbg name then
+          Some (name, Net.Interface.get_mac dbg name)
+        else
+          None
+      )
+      (Net.Interface.get_all dbg ())
   in
   (* Get all PIFs on this host *)
-  let pifs =
+  let pif_to_device_table =
     Db.PIF.get_records_where ~__context
       ~expr:
         (And
@@ -75,13 +76,22 @@ let make_tables ~__context ~host =
            , Eq (Field "physical", Literal "true")
            )
         )
+    |> List.map (fun (pref, prec) -> (pref, prec.API.pIF_device))
   in
-  {
-    device_to_position_table
-  ; device_to_mac_table
-  ; pif_to_device_table=
-      List.map (fun (pref, prec) -> (pref, prec.API.pIF_device)) pifs
-  }
+  debug "tables: device_to_position_table = %s"
+    (String.concat "; "
+       (List.map
+          (fun (d, p) -> d ^ ":" ^ string_of_int p)
+          device_to_position_table
+       )
+    ) ;
+  debug "tables: device_to_mac_table = %s"
+    (String.concat "; "
+       (List.map (fun (d, m) -> d ^ ":" ^ m) device_to_mac_table)
+    ) ;
+  debug "tables: pif_to_device_table = %s"
+    (String.concat "; " (List.map snd pif_to_device_table)) ;
+  {device_to_position_table; device_to_mac_table; pif_to_device_table}
 
 let refresh_internal ~__context ~interface_tables ~self =
   let dbg = Context.string_of_task __context in
