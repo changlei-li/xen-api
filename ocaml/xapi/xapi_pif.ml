@@ -46,7 +46,7 @@ let bridge_naming_convention (device : string) (pos_opt : int option) =
       "br" ^ device
 
 let n_of_xenbrn_opt bridge =
-  try Scanf.sscanf bridge "xenbr%d" Option.some with _ -> None
+  try Scanf.sscanf bridge "xenbr%d%!" Option.some with _ -> None
 
 type tables = {
     device_to_position_table: (string * int) list
@@ -138,10 +138,7 @@ let refresh_internal ~__context ~interface_tables ~self =
       (fun () -> pif_device_name)
       Fun.id ;
     maybe_update_database "MAC" pif.API.pIF_MAC Db.PIF.set_MAC
-      (fun () ->
-        List.assoc_opt pif_device_name interface_tables.device_to_mac_table
-        |> Option.value ~default:"NotFound"
-      )
+      (fun () -> Net.Interface.get_mac dbg pif_device_name)
       Fun.id
   ) ;
   maybe_update_database "PCI" pif.API.pIF_PCI Db.PIF.set_PCI
