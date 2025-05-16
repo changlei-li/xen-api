@@ -105,16 +105,43 @@ let refresh_internal ~__context ~interface_tables ~self =
     else
       pif.API.pIF_network
   in
+  let find_name_by_position position original_name =
+    match
+      List.find_map
+        (fun (name, pos) -> if pos = position then Some name else None)
+        interface_tables.device_to_position_table
+    with
+    | Some name ->
+        if name <> original_name then
+          info "PIF: device name changed from %s to %s" original_name name ;
+        name
+    | None -> (
+        (* This clause should be unlike to happen, if enter this, check the if
+           we can get mac from networkd. If yes there may be a bug *)
+        warn "PIF %s: no device found for position %d" original_name position ;
+        try
+          let mac = Net.Interface.get_mac dbg original_name in
+          error
+            "PIF %s: no device found for position %d, but get MAC address %s , \
+             there may be a bug in networkd sorting."
+            original_name position mac ;
+          original_name
+        with _ -> original_name
+      )
+  in
   let bridge = Db.Network.get_bridge ~__context ~self:network in
   (* Pif device name maybe change. Look up device_to_position table to get the
      new device name. *)
   let pif_device_name =
-    Option.bind (n_of_xenbrn_opt bridge) (fun position ->
-        List.find_map
-          (fun (name, pos) -> if pos = position then Some name else None)
-          interface_tables.device_to_position_table
-    )
-    |> Option.value ~default:pif.API.pIF_device
+    if pif.API.pIF_physical then (
+      match n_of_xenbrn_opt bridge with
+      | Some position ->
+          find_name_by_position position pif.API.pIF_device
+      | None ->
+          info "PIF %s: no position found for this device" pif.API.pIF_device ;
+          pif.API.pIF_device
+    ) else
+      pif.API.pIF_device
   in
   (* Update the specified PIF field in the database, if
    * and only if a corresponding value can be read from
