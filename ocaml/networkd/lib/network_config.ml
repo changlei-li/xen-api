@@ -22,7 +22,18 @@ exception Read_error
 
 exception Write_error
 
-let empty_config = default_config
+(* If the interface-rename script dir exists, the devices are already renamed
+   to eth<N>, the <N> indicates device order *)
+let device_already_renamed =
+  let dir = "/etc/sysconfig/network-scripts/interface-rename-data" in
+  Sys.file_exists dir && Sys.is_directory dir
+
+(* If devices have already been renamed, then interface_order is None,
+   since the order is now reflected in their names. *)
+let initial_interface_order = if device_already_renamed then None else Some []
+
+let empty_config =
+  {default_config with interface_order= initial_interface_order}
 
 let config_file_path = "/var/lib/xcp/networkd.db"
 
@@ -148,7 +159,7 @@ let read_management_conf interface_order =
               temp_vlan
           in
           debug "No management bridge in inventory file... using %s" bridge ;
-          if not Network_utils.device_already_renamed then
+          if not device_already_renamed then
             write_manage_iface_to_inventory bridge ;
           bridge
       | Some bridge ->
