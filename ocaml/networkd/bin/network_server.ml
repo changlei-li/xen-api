@@ -136,6 +136,12 @@ let sync_state () =
   write_config ()
 
 let reset_state () =
+  if Network_config.device_already_renamed then
+    ignore
+      (Forkhelpers.execute_command_get_output
+         "/etc/sysconfig/network-scripts/interface-rename.py"
+         ["--reset-to-install"]
+      ) ;
   let interface_order, _ = sort Network_config.initial_interface_order in
   config := Network_config.read_management_conf interface_order
 
