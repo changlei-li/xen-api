@@ -131,7 +131,7 @@ let call_script ?(log_output = Always) ?env ?stdin ?timeout script args =
 (** Construct a descriptive network name (used as name_label) for a give network interface. *)
 let choose_network_name_for_pif device pos_opt =
   let pos_str =
-    match pos_opt with None -> "" | Some pos -> Printf.sprintf "[%d]" pos
+    Option.fold ~none:"" ~some:(Printf.sprintf " (slot %d)") pos_opt
   in
   Printf.sprintf "Pool-wide network associated with %s%s" device pos_str
 
