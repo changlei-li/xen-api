@@ -1073,7 +1073,7 @@ let create ~__context ~uuid ~name_label ~name_description:_ ~hostname ~address
     ~tls_verification_enabled ~last_software_update ~last_update_hash
     ~recommended_guidances:[] ~latest_synced_updates_applied:`unknown
     ~pending_guidances_recommended:[] ~pending_guidances_full:[] ~ssh_enabled
-    ~ssh_enabled_timeout ~ssh_expiry ~console_idle_timeout ;
+    ~ssh_enabled_timeout ~ssh_expiry ~console_idle_timeout ~max_cstate:(-1L) ;
   (* If the host we're creating is us, make sure its set to live *)
   Db.Host_metrics.set_last_updated ~__context ~self:metrics ~value:(Date.now ()) ;
   Db.Host_metrics.set_live ~__context ~self:metrics ~value:host_is_us ;
@@ -3276,3 +3276,81 @@ let set_console_idle_timeout ~__context ~self ~value =
     error "Failed to configure console timeout: %s" (Printexc.to_string e) ;
     Helpers.internal_error "Failed to set console timeout: %Ld: %s" value
       (Printexc.to_string e)
+
+let xenpm_set_max_cstate value =
+  let args =
+    match value with
+    | -1L ->
+        ["set-max-cstate"; "unlimited"]
+    | n when n >= 0L ->
+        ["set-max-cstate"; Int64.to_string value]
+    | _ ->
+        raise
+          Api_errors.(
+            Server_error (invalid_value, ["value"; Int64.to_string value])
+          )
+  in
+  let resp = Helpers.call_script !Xapi_globs.xenpm_bin args in
+  (* Check runtime set max_cstate result *)
+  let cstate =
+    try Scanf.sscanf resp "max C-state set to %s" Fun.id
+    with Scanf.Scan_failure _ ->
+      error "Failed to parse max_cstate response: %s" resp ;
+      raise Api_errors.(Server_error (invalid_value, ["value"; resp]))
+  in
+  let value_in_resp =
+    match cstate with
+    | "unlimited" ->
+        -1L
+    | s -> (
+      try Scanf.sscanf s "C%Ld" Fun.id
+      with Scanf.Scan_failure _ ->
+        error "Failed to parse max_cstate response: %s" resp ;
+        raise Api_errors.(Server_error (invalid_value, ["value"; resp]))
+    )
+  in
+  if value_in_resp <> value then (
+    error "Failed to set max_cstate: expected %Ld, got %Ld" value value_in_resp ;
+    raise
+      Api_errors.(
+        Server_error
+          ( invalid_value
+          , [
+              "value"
+            ; Int64.to_string value_in_resp
+            ; "expected"
+            ; Int64.to_string value
+            ]
+          )
+      )
+  )
+
+let xen_cmdline_set_max_cstate value =
+  let args =
+    match value with
+    | -1L ->
+        ["--delete-xen"; "max_cstate"]
+    | n when n >= 0L ->
+        ["--set-xen"; Printf.sprintf "max_cstate=%Ld" n]
+    | _ ->
+        raise
+          Api_errors.(
+            Server_error (invalid_value, ["value"; Int64.to_string value])
+          )
+  in
+  Helpers.call_script !Xapi_globs.xen_cmdline_script args
+
+let set_max_cstate ~__context ~self ~value =
+  if Helpers.get_localhost ~__context <> self then
+    failwith "Forwarded to the wrong host" ;
+  let allowed_values = [-1L; 0L; 1L] in
+  if not (List.mem value allowed_values) then
+    raise
+      Api_errors.(Server_error (invalid_value, ["value"; Int64.to_string value])) ;
+  try
+    let _ = xenpm_set_max_cstate value in
+    let _ = xen_cmdline_set_max_cstate value in
+    Db.Host.set_max_cstate ~__context ~self ~value
+  with e ->
+    error "Failed to update max_cstate: %s" (Printexc.to_string e) ;
+    Helpers.internal_error "Failed to update max_cstate"
