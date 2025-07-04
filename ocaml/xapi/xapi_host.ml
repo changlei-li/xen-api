@@ -3283,7 +3283,7 @@ let xenpm_set_max_cstate value =
     | -1L ->
         ["set-max-cstate"; "unlimited"]
     | n when n >= 0L ->
-        ["set-max-cstate"; Int64.to_string value]
+        ["set-max-cstate"; Int64.to_string value; "0"]
     | _ ->
         raise
           Api_errors.(
@@ -3331,7 +3331,7 @@ let xen_cmdline_set_max_cstate value =
     | -1L ->
         ["--delete-xen"; "max_cstate"]
     | n when n >= 0L ->
-        ["--set-xen"; Printf.sprintf "max_cstate=%Ld" n]
+        ["--set-xen"; Printf.sprintf "max_cstate=%Ld,0" n]
     | _ ->
         raise
           Api_errors.(
