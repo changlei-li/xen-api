@@ -583,3 +583,5 @@ val schedule_disable_ssh_job :
 
 val set_max_cstate :
   __context:Context.t -> self:API.ref_host -> value:int64 -> unit
+
+val sync_max_cstate : __context:Context.t -> host:API.ref_host -> unit

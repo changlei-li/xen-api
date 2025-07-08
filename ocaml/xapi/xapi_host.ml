@@ -3354,3 +3354,37 @@ let set_max_cstate ~__context ~self ~value =
   with e ->
     error "Failed to update max_cstate: %s" (Printexc.to_string e) ;
     Helpers.internal_error "Failed to update max_cstate"
+
+let xen_cmdline_get_max_cstate () =
+  let args = ["--get-xen"; "max_cstate"] in
+  try
+    let ret =
+      Helpers.call_script !Xapi_globs.xen_cmdline_script args |> String.trim
+    in
+    (* the ret may be "" -> -1L
+        or "max_cstate=0" -> 0L
+        or "max_cstate=1,0" -> 1L *)
+    if ret = "" then
+      -1L
+    else
+      match String.split_on_char '=' ret with
+      | ["max_cstate"; state] -> (
+        match String.split_on_char ',' state with
+        | [cstate] | [cstate; _] ->
+            Int64.of_string cstate
+        | _ ->
+            error "Failed to parse max_cstate response: %s" ret ;
+            Helpers.internal_error "Failed to get max_cstate"
+      )
+      | _ ->
+          error "Failed to parse max_cstate response: %s" ret ;
+          Helpers.internal_error "Failed to get max_cstate"
+  with e ->
+    error "Failed to get max_cstate: %s" (Printexc.to_string e) ;
+    Helpers.internal_error "Failed to get max_cstate"
+
+let sync_max_cstate ~__context ~host =
+  try
+    let max_cstate = xen_cmdline_get_max_cstate () in
+    Db.Host.set_max_cstate ~__context ~self:host ~value:max_cstate
+  with e -> error "Failed to sync max_cstate: %s" (Printexc.to_string e)

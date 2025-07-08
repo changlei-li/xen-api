@@ -385,5 +385,8 @@ let update_env __context sync_keys =
       let status = Fe_systemctl.is_active ~service:ssh_service in
       Db.Host.set_ssh_enabled ~__context ~self:localhost ~value:status
   ) ;
+  switched_sync Xapi_globs.sync_max_cstate (fun () ->
+      Xapi_host.sync_max_cstate ~__context ~host:localhost
+  ) ;
 
   remove_pending_guidances ~__context
