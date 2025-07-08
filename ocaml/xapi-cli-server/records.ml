@@ -3375,6 +3375,13 @@ let host_record rpc session_id host =
               ~value:(safe_i64_of_string "console-idle-timeout" value)
           )
           ()
+      ; make_field ~name:"max-cstate"
+          ~get:(fun () -> Int64.to_string (x ()).API.host_max_cstate)
+          ~set:(fun value ->
+            Client.Host.set_max_cstate ~rpc ~session_id ~self:host
+              ~value:(safe_i64_of_string "max-cstate" value)
+          )
+          ()
       ]
   }
 
