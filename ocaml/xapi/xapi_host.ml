@@ -3277,114 +3277,26 @@ let set_console_idle_timeout ~__context ~self ~value =
     Helpers.internal_error "Failed to set console timeout: %Ld: %s" value
       (Printexc.to_string e)
 
-let xenpm_set_max_cstate value =
-  let args =
-    match value with
-    | -1L ->
-        ["set-max-cstate"; "unlimited"]
-    | n when n >= 0L ->
-        ["set-max-cstate"; Int64.to_string value; "0"]
-    | _ ->
-        raise
-          Api_errors.(
-            Server_error (invalid_value, ["value"; Int64.to_string value])
-          )
-  in
-  let resp = Helpers.call_script !Xapi_globs.xenpm_bin args in
-  (* Check runtime set max_cstate result *)
-  let cstate =
-    try Scanf.sscanf resp "max C-state set to %s" Fun.id
-    with Scanf.Scan_failure _ ->
-      error "Failed to parse max_cstate response: %s" resp ;
-      raise Api_errors.(Server_error (invalid_value, ["value"; resp]))
-  in
-  let value_in_resp =
-    match cstate with
-    | "unlimited" ->
-        -1L
-    | s -> (
-      try Scanf.sscanf s "C%Ld" Fun.id
-      with Scanf.Scan_failure _ ->
-        error "Failed to parse max_cstate response: %s" resp ;
-        raise Api_errors.(Server_error (invalid_value, ["value"; resp]))
-    )
-  in
-  if value_in_resp <> value then (
-    error "Failed to set max_cstate: expected %Ld, got %Ld" value value_in_resp ;
-    raise
-      Api_errors.(
-        Server_error
-          ( invalid_value
-          , [
-              "value"
-            ; Int64.to_string value_in_resp
-            ; "expected"
-            ; Int64.to_string value
-            ]
-          )
-      )
-  )
-
-let xen_cmdline_set_max_cstate value =
-  let args =
-    match value with
-    | -1L ->
-        ["--delete-xen"; "max_cstate"]
-    | n when n >= 0L ->
-        ["--set-xen"; Printf.sprintf "max_cstate=%Ld,0" n]
-    | _ ->
-        raise
-          Api_errors.(
-            Server_error (invalid_value, ["value"; Int64.to_string value])
-          )
-  in
-  Helpers.call_script !Xapi_globs.xen_cmdline_script args
-
 let set_max_cstate ~__context ~self ~value =
   if Helpers.get_localhost ~__context <> self then
     failwith "Forwarded to the wrong host" ;
   let allowed_values = [-1L; 0L; 1L] in
   if not (List.mem value allowed_values) then
-    raise
-      Api_errors.(Server_error (invalid_value, ["value"; Int64.to_string value])) ;
-  try
-    let _ = xenpm_set_max_cstate value in
-    let _ = xen_cmdline_set_max_cstate value in
-    Db.Host.set_max_cstate ~__context ~self ~value
-  with e ->
-    error "Failed to update max_cstate: %s" (Printexc.to_string e) ;
-    Helpers.internal_error "Failed to update max_cstate"
-
-let xen_cmdline_get_max_cstate () =
-  let args = ["--get-xen"; "max_cstate"] in
-  try
-    let ret =
-      Helpers.call_script !Xapi_globs.xen_cmdline_script args |> String.trim
+    let err_msg =
+      Printf.sprintf "value %Ld is not in the supported range [-1; 0; 1]" value
     in
-    (* the ret may be "" -> -1L
-        or "max_cstate=0" -> 0L
-        or "max_cstate=1,0" -> 1L *)
-    if ret = "" then
-      -1L
-    else
-      match String.split_on_char '=' ret with
-      | ["max_cstate"; state] -> (
-        match String.split_on_char ',' state with
-        | [cstate] | [cstate; _] ->
-            Int64.of_string cstate
-        | _ ->
-            error "Failed to parse max_cstate response: %s" ret ;
-            Helpers.internal_error "Failed to get max_cstate"
-      )
-      | _ ->
-          error "Failed to parse max_cstate response: %s" ret ;
-          Helpers.internal_error "Failed to get max_cstate"
-  with e ->
-    error "Failed to get max_cstate: %s" (Printexc.to_string e) ;
-    Helpers.internal_error "Failed to get max_cstate"
+    raise Api_errors.(Server_error (value_not_supported, [err_msg]))
+  else
+    try
+      Xapi_host_max_cstate.xenpm_set value ;
+      Xapi_host_max_cstate.xen_cmdline_set value ;
+      Db.Host.set_max_cstate ~__context ~self ~value
+    with e ->
+      error "Failed to update max_cstate: %s" (Printexc.to_string e) ;
+      Helpers.internal_error "Failed to update max_cstate"
 
 let sync_max_cstate ~__context ~host =
   try
-    let max_cstate = xen_cmdline_get_max_cstate () in
+    let max_cstate = Xapi_host_max_cstate.xen_cmdline_get () in
     Db.Host.set_max_cstate ~__context ~self:host ~value:max_cstate
   with e -> error "Failed to sync max_cstate: %s" (Printexc.to_string e)
