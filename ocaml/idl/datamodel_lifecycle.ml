@@ -98,7 +98,7 @@ let prototyped_of_field = function
   | "SM", "host_pending_features" ->
       Some "24.37.0"
   | "host", "max_cstate" ->
-      Some "25.21.0-next"
+      Some "25.24.0-next"
   | "host", "console_idle_timeout" ->
       Some "25.21.0"
   | "host", "ssh_expiry" ->
@@ -224,7 +224,7 @@ let prototyped_of_message = function
   | "VTPM", "create" ->
       Some "22.26.0"
   | "host", "set_max_cstate" ->
-      Some "25.21.0-next"
+      Some "25.24.0-next"
   | "host", "set_console_idle_timeout" ->
       Some "25.21.0"
   | "host", "set_ssh_enabled_timeout" ->
