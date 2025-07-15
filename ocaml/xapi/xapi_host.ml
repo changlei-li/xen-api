@@ -3300,3 +3300,8 @@ let sync_max_cstate ~__context ~host =
     let max_cstate = Xapi_host_max_cstate.xen_cmdline_get () in
     Db.Host.set_max_cstate ~__context ~self:host ~value:max_cstate
   with e -> error "Failed to sync max_cstate: %s" (Printexc.to_string e)
+
+let get_NTP_synchronized ~__context ~self =
+  if Helpers.get_localhost ~__context <> self then
+    failwith "Forwarded to the wrong host" ;
+  Ntp.get_ntp_synced ()

@@ -2471,6 +2471,13 @@ let set_max_cstate =
       ]
     ~allowed_roles:_R_POOL_OP ()
 
+let get_NTP_synchronized =
+  call ~name:"get_NTP_synchronized" ~lifecycle:[]
+    ~doc:"Check if the host is synchronized with NTP server"
+    ~params:[(Ref _host, "self", "The host")]
+    ~result:(Bool, "True if the host is synchronized with NTP server")
+    ~allowed_roles:_R_READ_ONLY ()
+
 (** Hosts *)
 let t =
   create_obj ~in_db:true
@@ -2615,6 +2622,7 @@ let t =
       ; set_ssh_enabled_timeout
       ; set_console_idle_timeout
       ; set_max_cstate
+      ; get_NTP_synchronized
       ]
     ~contents:
       ([

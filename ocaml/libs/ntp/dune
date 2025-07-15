@@ -1,0 +1,6 @@
+(library
+ (name ntp)
+ (foreign_stubs
+  (language c)
+  (names ntp_stubs))
+ (wrapped false))

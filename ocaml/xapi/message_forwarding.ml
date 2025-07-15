@@ -4100,6 +4100,12 @@ functor
         let local_fn = Local.Host.set_max_cstate ~self ~value in
         let remote_fn = Client.Host.set_max_cstate ~self ~value in
         do_op_on ~local_fn ~__context ~host:self ~remote_fn
+
+      let get_NTP_synchronized ~__context ~self =
+        info "Host.get_NTP_synchronized: host='%s'" (host_uuid ~__context self) ;
+        let local_fn = Local.Host.get_NTP_synchronized ~self in
+        let remote_fn = Client.Host.get_NTP_synchronized ~self in
+        do_op_on ~local_fn ~__context ~host:self ~remote_fn
     end
 
     module Host_crashdump = struct

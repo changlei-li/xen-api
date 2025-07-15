@@ -223,6 +223,8 @@ let prototyped_of_message = function
       Some "22.26.0"
   | "VTPM", "create" ->
       Some "22.26.0"
+  | "host", "get_NTP_synchronized" ->
+      Some "25.24.0-next"
   | "host", "set_max_cstate" ->
       Some "25.24.0-next"
   | "host", "set_console_idle_timeout" ->

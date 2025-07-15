@@ -158,6 +158,7 @@
   mirage-crypto-rng.unix
   mtime
   mtime.clock.os
+  ntp
   pam
   pciutil
   pci
