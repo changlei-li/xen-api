@@ -31,7 +31,7 @@ let get_dhclient_interfaces () =
 
 let get_dhcp_ntp_server interface =
   let file_name = Printf.sprintf "/var/lib/xcp/dhclient-%s.leases" interface in
-  Unixext.read_lines file_name
+  Xapi_stdext_unix.Unixext.read_lines file_name
   |> List.find_map (fun line ->
          let line = String.trim line in
          try Scanf.sscanf line "option ntp-servers %s;" (fun x -> Some x)
@@ -60,7 +60,7 @@ let restart_ntp_service () =
 
 let parse_chrony_conf () =
   try
-    Unixext.read_lines chrony_conf
+    Xapi_stdext_unix.Unixext.read_lines chrony_conf
     |> List.partition (fun line -> String.starts_with line "server ")
   with Sys_error _ -> ([], [])
 

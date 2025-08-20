@@ -97,6 +97,10 @@ let prototyped_of_field = function
       Some "22.26.0"
   | "SM", "host_pending_features" ->
       Some "24.37.0"
+  | "host", "ntp_custom_servers" ->
+      Some "25.28.0-next"
+  | "host", "ntp_mode" ->
+      Some "25.28.0-next"
   | "host", "ssh_auto_mode" ->
       Some "25.27.0"
   | "host", "console_idle_timeout" ->
@@ -223,6 +227,10 @@ let prototyped_of_message = function
       Some "22.26.0"
   | "VTPM", "create" ->
       Some "22.26.0"
+  | "host", "set_ntp_custom_servers" ->
+      Some "25.28.0-next"
+  | "host", "set_ntp_mode" ->
+      Some "25.28.0-next"
   | "host", "set_ssh_auto_mode" ->
       Some "25.27.0"
   | "host", "set_console_idle_timeout" ->

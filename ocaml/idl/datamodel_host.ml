@@ -2480,6 +2480,35 @@ let latest_synced_updates_applied_state =
       ]
     )
 
+let host_ntp_mode =
+  Enum
+    ( "host_ntp_mode"
+    , [
+        ("dhcp", "Using NTP servers assigned by DHCP to sync time")
+      ; ("custom", "Using custom NTP servers configured by user to sync time")
+      ; ("default_servers", "Using default NTP servers to sync time")
+      ]
+    )
+
+let set_ntp_mode =
+  call ~name:"set_ntp_mode" ~lifecycle:[] ~doc:"Set the NTP mode for the host"
+    ~params:
+      [
+        (Ref _host, "self", "The host")
+      ; (host_ntp_mode, "value", "The NTP mode to set")
+      ]
+    ~allowed_roles:_R_POOL_OP ()
+
+let set_ntp_custom_servers =
+  call ~name:"set_ntp_custom_servers" ~lifecycle:[]
+    ~doc:"Set the custom NTP servers for the host"
+    ~params:
+      [
+        (Ref _host, "self", "The host")
+      ; (Set String, "value", "The set of custom NTP servers to configure")
+      ]
+    ~allowed_roles:_R_POOL_OP ()
+
 (** Hosts *)
 let t =
   create_obj ~in_db:true
@@ -2624,6 +2653,8 @@ let t =
       ; set_ssh_enabled_timeout
       ; set_console_idle_timeout
       ; set_ssh_auto_mode
+      ; set_ntp_mode
+      ; set_ntp_custom_servers
       ]
     ~contents:
       ([
@@ -3083,6 +3114,13 @@ let t =
             ~default_value:(Some (VBool Constants.default_ssh_auto_mode))
             "ssh_auto_mode"
             "Reflects whether SSH auto mode is enabled for the host"
+        ; field ~qualifier:DynamicRO ~lifecycle:[] ~ty:host_ntp_mode
+            ~default_value:(Some (VEnum "dhcp")) "ntp_mode"
+            "Indicates NTP servers are assigned by DHCP, or configured by \
+             user, or the default servers"
+        ; field ~qualifier:DynamicRO ~lifecycle:[] ~ty:(Set String)
+            ~default_value:(Some (VSet [])) "ntp_custom_servers"
+            "The set of NTP servers configured for the host"
         ]
       )
     ()

@@ -588,3 +588,9 @@ val schedule_disable_ssh_job :
 
 val set_ssh_auto_mode :
   __context:Context.t -> self:API.ref_host -> value:bool -> unit
+
+val set_ntp_mode :
+  __context:Context.t -> self:API.ref_host -> value:API.host_ntp_mode -> unit
+
+val set_ntp_custom_servers :
+  __context:Context.t -> self:API.ref_host -> value:string list -> unit
