@@ -3322,7 +3322,35 @@ let set_console_idle_timeout ~__context ~self ~value =
       (Printexc.to_string e)
 
 let set_ntp_mode ~__context ~self ~value =
-  Xapi_host_ntp.set_mode ~__context ~self ~value
+  let current_mode = Db.Host.get_ntp_mode ~__context ~self in
+  let open Xapi_host_ntp in
+  let ensure_custom_servers_exist servers =
+    if servers = [] then
+      Helpers.internal_error "ntp_custom_servers is empty, please set first"
+  in
+  let default_servers = !Xapi_globs.default_ntp_servers in
+  ( match (current_mode, value) with
+  | `dhcp, `custom ->
+      let custom_servers = Db.Host.get_ntp_custom_servers ~__context ~self in
+      ensure_custom_servers_exist custom_servers ;
+      remove_dhcp_ntp_servers () ;
+      set_servers_in_conf custom_servers
+  | `default_servers, `custom ->
+      let custom_servers = Db.Host.get_ntp_custom_servers ~__context ~self in
+      ensure_custom_servers_exist custom_servers ;
+      set_servers_in_conf custom_servers
+  | _, `dhcp ->
+      clear_servers_in_conf () ; add_dhcp_ntp_servers ()
+  | `dhcp, `default_servers ->
+      remove_dhcp_ntp_servers () ;
+      set_servers_in_conf default_servers
+  | `custom, `default_servers ->
+      set_servers_in_conf default_servers
+  | _, _ ->
+      ()
+  ) ;
+  restart_ntp_service () ;
+  Db.Host.set_ntp_mode ~__context ~self ~value
 
 let set_ntp_custom_servers ~__context ~self ~value =
   let current_mode = Db.Host.get_ntp_mode ~__context ~self in
@@ -3331,7 +3359,8 @@ let set_ntp_custom_servers ~__context ~self ~value =
       Helpers.internal_error
         "ntp_mode is custom, can't clear ntp_custom_servers"
   | `custom, servers ->
-      Xapi_host_ntp.set_custom_servers ~__context ~self ~value:servers
-        Db.Host.set_ntp_custom_servers ~__context ~self ~value
+      Xapi_host_ntp.set_servers_in_conf servers ;
+      Xapi_host_ntp.restart_ntp_service () ;
+      Db.Host.set_ntp_custom_servers ~__context ~self ~value
   | _ ->
       Db.Host.set_ntp_custom_servers ~__context ~self ~value

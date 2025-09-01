@@ -16,13 +16,17 @@ module D = Debug.Make (struct let name = "xapi_host_ntp" end)
 
 open D
 
-let dhclient_chrony_servers_prefix = "/var/lib/dhclient/chrony.servers"
+let dhclient_chrony_servers_prefix = "/var/lib/dhclient/chrony.servers."
 
 let chrony_conf = "/etc/chrony.conf"
 
 let get_dhclient_interfaces () =
   let extract_interface_name filename =
-    try Scanf.sscanf filename "dhclient-%[^.].leases" (fun x -> Some x)
+    try
+      Scanf.sscanf filename "dhclient-%[^.].leases" (fun x ->
+          debug "line %s, extract %s" filename x ;
+          Some x
+      )
     with _ -> None
   in
   Sys.readdir "/var/lib/xcp"
@@ -32,28 +36,38 @@ let get_dhclient_interfaces () =
 let get_dhcp_ntp_server interface =
   let file_name = Printf.sprintf "/var/lib/xcp/dhclient-%s.leases" interface in
   Xapi_stdext_unix.Unixext.read_lines file_name
+  (* todo: from the last to query *)
   |> List.find_map (fun line ->
          let line = String.trim line in
-         try Scanf.sscanf line "option ntp-servers %s;" (fun x -> Some x)
+         try
+           Scanf.sscanf line "option ntp-servers %[^;];" (fun x ->
+               debug "line: %s, extract: %s" line x ;
+               Some x
+           )
          with _ -> None
      )
 
-let add_dhcp_ntp_server () =
+let add_dhcp_ntp_servers () =
   get_dhclient_interfaces ()
   |> List.iter (fun interface ->
          match get_dhcp_ntp_server interface with
          | Some server ->
              let line = Printf.sprintf "server %s iburst" server in
-             Unixext.append_line
+             Xapi_stdext_unix.Unixext.write_string_to_file
                (dhclient_chrony_servers_prefix ^ interface)
                line
          | None ->
              ()
      )
 
-let remove_dhcp_ntp () =
-  Forkhelpers.execute_command_get_output "rm"
-    ["-r"; "/var/lib/dhclient/chrony.servers.*"]
+let remove_dhcp_ntp_servers () =
+  Sys.readdir "/var/lib/dhclient/"
+  |> Array.iter (fun file ->
+         if String.starts_with ~prefix:"chrony.servers." file then (
+           let file = Printf.sprintf "/var/lib/dhclient/%s" file in
+           debug "Remove %s" file ; Sys.remove file
+         )
+     )
 
 let restart_ntp_service () =
   Xapi_systemctl.restart ~wait_until_success:false "chronyd"
@@ -61,36 +75,21 @@ let restart_ntp_service () =
 let parse_chrony_conf () =
   try
     Xapi_stdext_unix.Unixext.read_lines chrony_conf
-    |> List.partition (fun line -> String.starts_with line "server ")
+    |> List.partition (String.starts_with ~prefix:"server ")
   with Sys_error _ -> ([], [])
 
 let write_chrony_conf other servers =
   let lines = List.map (fun s -> Printf.sprintf "server %s iburst" s) servers in
   let all_lines = other @ lines in
-  Unixext.write_lines chrony_conf all_lines
+  let write_lines fname lines =
+    Xapi_stdext_unix.Unixext.write_string_to_file fname
+      (String.concat "\n" lines)
+  in
+  write_lines chrony_conf all_lines
 
-let set_ntp_mode ~__context ~self mode =
-  let current_mode = Db.Host.get_ntp_mode ~~context ~self in
-  if mode = current_mode then
-    ()
-  else
-    match (current_mode, mode) with
-    | dhcp, custom ->
-        remove_dhcp_ntp () ; add_custom_ntp_servers () ; restart_ntp_service ()
-    | custom, dhcp ->
-        remove_custom_ntp_servers () ;
-        add_dhcp_ntp_server () ;
-        restart_ntp_service ()
-    | dhcp, default ->
-        remove_dhcp_ntp () ;
-        remove_custom_ntp_servers () ;
-        restart_ntp_service ()
-    | default, dhcp ->
-        add_dhcp_ntp_server () ; restart_ntp_service ()
-    | default, custom ->
-        remove_custom_ntp_servers () ;
-        restart_ntp_service ()
-    | custom, default ->
-        remove_custom_ntp_servers () ;
-        add_default_ntp_servers () ;
-        restart_ntp_service ()
+let set_servers_in_conf servers =
+  let old, other = parse_chrony_conf () in
+  debug "old: %s\n other: %s" (String.concat ", " old) (String.concat ", " other) ;
+  write_chrony_conf other servers
+
+let clear_servers_in_conf () = set_servers_in_conf []
