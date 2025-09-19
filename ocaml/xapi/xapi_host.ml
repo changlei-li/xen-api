@@ -3355,3 +3355,9 @@ let set_max_cstate ~__context ~self ~value =
     with e ->
       error "Failed to update max_cstate: %s" (Printexc.to_string e) ;
       Helpers.internal_error "Failed to update max_cstate"
+
+let sync_max_cstate ~__context ~host =
+  try
+    let max_cstate = Xapi_host_max_cstate.xen_cmdline_get () in
+    Db.Host.set_max_cstate ~__context ~self:host ~value:max_cstate
+  with e -> error "Failed to sync max_cstate: %s" (Printexc.to_string e)
