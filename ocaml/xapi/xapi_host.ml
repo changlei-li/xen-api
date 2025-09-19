@@ -1086,7 +1086,8 @@ let create ~__context ~uuid ~name_label ~name_description:_ ~hostname ~address
     ~tls_verification_enabled ~last_software_update ~last_update_hash
     ~recommended_guidances:[] ~latest_synced_updates_applied:`unknown
     ~pending_guidances_recommended:[] ~pending_guidances_full:[] ~ssh_enabled
-    ~ssh_enabled_timeout ~ssh_expiry ~console_idle_timeout ~ssh_auto_mode ;
+    ~ssh_enabled_timeout ~ssh_expiry ~console_idle_timeout ~ssh_auto_mode
+    ~max_cstate:(-1L) ;
   (* If the host we're creating is us, make sure its set to live *)
   Db.Host_metrics.set_last_updated ~__context ~self:metrics ~value:(Date.now ()) ;
   Db.Host_metrics.set_live ~__context ~self:metrics ~value:host_is_us ;
@@ -3332,3 +3333,25 @@ let set_console_idle_timeout ~__context ~self ~value =
     error "Failed to configure console timeout: %s" (Printexc.to_string e) ;
     Helpers.internal_error "Failed to set console timeout: %Ld: %s" value
       (Printexc.to_string e)
+
+let set_max_cstate ~__context ~self ~value =
+  if Helpers.get_localhost ~__context <> self then
+    failwith "Forwarded to the wrong host" ;
+  let allowed_values = [-1L; 0L; 1L] in
+  if not (List.mem value allowed_values) then
+    let err_msg =
+      Printf.sprintf "value %Ld is not in the supported range [-1; 0; 1]" value
+    in
+    raise
+      Api_errors.(
+        Server_error
+          (value_not_supported, ["max_cstate"; Int64.to_string value; err_msg])
+      )
+  else
+    try
+      Xapi_host_max_cstate.xenpm_set value ;
+      Xapi_host_max_cstate.xen_cmdline_set value ;
+      Db.Host.set_max_cstate ~__context ~self ~value
+    with e ->
+      error "Failed to update max_cstate: %s" (Printexc.to_string e) ;
+      Helpers.internal_error "Failed to update max_cstate"

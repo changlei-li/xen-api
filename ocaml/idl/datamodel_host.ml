@@ -2505,6 +2505,19 @@ let latest_synced_updates_applied_state =
       ]
     )
 
+let set_max_cstate =
+  call ~name:"set_max_cstate" ~lifecycle:[]
+    ~doc:
+      "Sets xen's max-cstate on a host. See: \
+       https://xenbits.xen.org/docs/unstable/misc/xen-command-line.html#max_cstate-x86. \
+       Only -1, 0, 1 are supported currently."
+    ~params:
+      [
+        (Ref _host, "self", "The host")
+      ; (Int, "value", "The max_cstate to apply to a host")
+      ]
+    ~allowed_roles:_R_POOL_OP ()
+
 (** Hosts *)
 let t =
   create_obj ~in_db:true
@@ -2649,6 +2662,7 @@ let t =
       ; set_ssh_enabled_timeout
       ; set_console_idle_timeout
       ; set_ssh_auto_mode
+      ; set_max_cstate
       ]
     ~contents:
       ([
@@ -3108,6 +3122,11 @@ let t =
             ~default_value:(Some (VBool Constants.default_ssh_auto_mode))
             "ssh_auto_mode"
             "Reflects whether SSH auto mode is enabled for the host"
+        ; field ~qualifier:DynamicRO ~lifecycle:[] ~ty:Int
+            ~default_value:(Some (VInt (-1L))) "max_cstate"
+            "The maximum C-state that the host is allowed to enter, '-1' means \
+             unlimited, all C-states are allowed, while N >= 0 is for max \
+             cstate CN"
         ]
       )
     ()
