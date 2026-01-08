@@ -137,6 +137,11 @@ type t = {
   ; verified: verification_config option
 }
 
+type stunnel_error =
+  | Certificate_verify of string
+  | Stunnel of string
+  | Unknown of string
+
 let appliance =
   {
     sni= None
@@ -197,11 +202,13 @@ let config_file ?(accept = None) config host port =
        ; (if is_fips then ["fips=yes"] else ["fips=no"])
        ; [debug_conf_of_env ()]
        ; ( match accept with
-         | Some (h, p) ->
+         | Some (`Local_host_port (h, p)) ->
              [
                "[client-proxy]"
              ; Printf.sprintf "accept=%s:%s" h (string_of_int p)
              ]
+         | Some (`Unix_socket_path path) ->
+             ["[client-proxy]"; Printf.sprintf "accept=%s" path]
          | None ->
              []
          )
@@ -375,12 +382,24 @@ let attempt_one_connect ?(use_fork_exec_helper = true)
     match data_channel with
     | `Local_host_port (h, p) ->
         (* The stunnel will listen on a local host and port *)
-        let config = config_file ~accept:(Some (h, p)) verify_cert host port in
+        let config =
+          config_file
+            ~accept:(Some (`Local_host_port (h, p)))
+            verify_cert host port
+        in
         start None config
     | `Unix_socket s ->
         (* The stunnel will listen on a UNIX socket *)
         let config = config_file verify_cert host port in
         start (Some s) config
+    | `Unix_socket_path path ->
+        (* The stunnel will listen on a UNIX socket path *)
+        let config =
+          config_file
+            ~accept:(Some (`Unix_socket_path path))
+            verify_cert host port
+        in
+        start None config
   in
   (* Tidy up any remaining unclosed fds *)
   match result with
@@ -450,7 +469,7 @@ let with_client_proxy_systemd_service ~verify_cert ~remote_host ~remote_port
   let cmd_path = stunnel_path () in
   let config =
     config_file
-      ~accept:(Some (local_host, local_port))
+      ~accept:(Some (`Local_host_port (local_host, local_port)))
       verify_cert remote_host remote_port
   in
   let stop () = ignore (Fe_systemctl.stop ~service) in
@@ -504,7 +523,7 @@ let check_error s line =
   if Astring.String.is_infix ~affix:s line then
     raise (Stunnel_error s)
 
-let diagnose_failure st_proc =
+let check_stunnel_logfile logfile =
   let check_line line =
     !stunnel_logger line ;
     check_verify_error line ;
@@ -513,7 +532,67 @@ let diagnose_failure st_proc =
     check_error "No route to host" line ;
     check_error "Invalid argument" line
   in
-  Unixext.readfile_line check_line st_proc.logfile
+  Unixext.readfile_line check_line logfile
+
+let diagnose_failure st_proc = check_stunnel_logfile st_proc.logfile
+
+let check_stunnel_status logfile =
+  match check_stunnel_logfile logfile with
+  | () ->
+      Ok ()
+  | exception Stunnel_verify_error reason ->
+      Error (Certificate_verify reason)
+  | exception Stunnel_error reason ->
+      Error (Stunnel reason)
+  | exception exn ->
+      let reason = Printexc.to_string exn in
+      Error (Unknown reason)
+
+let wait_for_init_done unix_socket_path logfile =
+  let has_done logfile =
+    let s = "Configuration successful" in
+    try
+      let content = Unixext.string_of_file logfile in
+      Astring.String.is_infix ~affix:s content
+    with e ->
+      D.debug "Exception when checking stunnel log file: %s"
+        (Printexc.to_string e) ;
+      false
+  in
+  let rec check ~max_retries cnt =
+    Thread.delay 1.0 ;
+    check_stunnel_logfile logfile ;
+    match (Sys.file_exists unix_socket_path && has_done logfile, cnt) with
+    | true, _ ->
+        ()
+    | false, cnt when cnt > max_retries ->
+        raise (Stunnel_error "Timed out when initialising stunnel")
+    | false, cnt ->
+        check ~max_retries (cnt + 1)
+  in
+  check ~max_retries:3 0
+
+let with_client_proxy_unix_socket ~verify_cert ~remote_host ~remote_port
+    ~unix_socket_path f =
+  Unixext.unlink_safe unix_socket_path ;
+  let write_to_log = D.debug "%s: %s" __FUNCTION__ in
+  let pid, logfile =
+    attempt_one_connect ~write_to_log ~extended_diagnosis:true
+      (`Unix_socket_path unix_socket_path) verify_cert remote_host remote_port
+  in
+  let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
+  finally
+    (fun () ->
+      wait_for_init_done unix_socket_path logfile ;
+      D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d" __FUNCTION__
+        (getpid pid) unix_socket_path remote_host remote_port ;
+      f ~diagnose_stunnel:(fun () -> check_stunnel_status logfile)
+    )
+    (fun () ->
+      disconnect_with_pid ~wait:false ~force:true pid ;
+      Unixext.unlink_safe unix_socket_path ;
+      Unixext.unlink_safe logfile
+    )
 
 (* If we reach here the whole stunnel log should have been gone through
    (possibly printed/logged somewhere. No necessity to raise an exception,
