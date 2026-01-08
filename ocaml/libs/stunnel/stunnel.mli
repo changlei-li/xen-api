@@ -55,6 +55,11 @@ type t = {
   ; verified: verification_config option
 }
 
+type stunnel_error =
+  | Certificate_verify of string
+  | Stunnel of string
+  | Unknown of string
+
 val appliance : verification_config
 
 val pool : verification_config
@@ -99,3 +104,16 @@ val with_client_proxy_systemd_service :
   -> service:string
   -> (unit -> 'a)
   -> 'a
+
+val with_client_proxy_unix_socket :
+     verify_cert:verification_config option
+  -> remote_host:string
+  -> remote_port:int
+  -> unix_socket_path:string
+  -> (diagnose_stunnel:(unit -> (unit, stunnel_error) result) -> 'a)
+  -> 'a
+(** Establish a connection to the specified [remote_host] and [remote_port]
+    via a stunnel process, using a UNIX socket file at [unix_socket_path] to
+    accept non-TLS traffic. The provided function (last parameter) can send
+    traffic through the [unix_socket_path] to the [remote_host] and [remote_port]
+    and check the stunnel error by invoking [diagnose_stunnel ()]. *)
