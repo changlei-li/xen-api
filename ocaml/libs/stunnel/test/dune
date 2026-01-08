@@ -1,0 +1,16 @@
+(executable
+ (name test_stunnel)
+ (libraries
+  astring
+  stunnel
+  threads.posix
+  unix
+  xapi-stdext-pervasives
+  xapi-stdext-unix
+  uuidm))
+
+(rule
+ (alias runtest)
+ (package stunnel)
+ (action
+  (run %{exe:test_stunnel.exe})))
