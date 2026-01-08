@@ -489,48 +489,49 @@ let with_client_proxy_systemd_service ~verify_cert ~remote_host ~remote_port
     )
     (fun () -> Unixext.unlink_safe conf_path)
 
-let check_verify_error line =
-  let sub_after i s =
-    let len = String.length s in
-    String.sub s i (len - i)
-  in
-  let split_1 c s =
-    match Astring.String.cut ~sep:c s with Some (x, _) -> x | None -> s
-  in
+let check_verify_error =
   (* When verified with a mismatched certificate, one line of log from stunnel
    * would look like:
      SSL_connect: ssl/statem/statem_clnt.c:1889: error:0A000086:SSL routines::certificate verify failed
-   * in this case, Stunnel_verify_error can be raised with detailed error as
-   * reason if it can found in the log *)
-  if Astring.String.is_infix ~affix:"certificate verify failed" line then
-    match Astring.String.find_sub ~sub:"error:" line with
-    | Some e ->
-        raise
-          (Stunnel_verify_error
-             (split_1 "," (sub_after (e + String.length "error:") line))
-          )
+   * The error format is: SSL_connect:...:error:<hex_code>:<library>::<reason>
+   * We use regex to match OpenSSL client connection errors specifically *)
+  let openssl_error_re =
+    Re.Posix.re "SSL_connect:.*error:([0-9A-F]{8}:[^,]*)" |> Re.compile
+  in
+  fun line ->
+    match Re.exec_opt openssl_error_re line with
+    | Some groups ->
+        (* Extract capture group 1, which is everything after "error:" *)
+        let matched = Re.Group.get groups 1 in
+        raise (Stunnel_verify_error matched)
+    | None
+      when Astring.String.is_infix
+             ~affix:"No certificate or private key specified" line ->
+        raise (Stunnel_verify_error "The specified certificate is corrupt")
     | None ->
-        raise (Stunnel_verify_error "")
-  else if
-    Astring.String.is_infix ~affix:"No certificate or private key specified"
-      line
-  then
-    raise (Stunnel_verify_error "The specified certificate is corrupt")
-  else
-    ()
+        ()
 
-let check_error s line =
-  if Astring.String.is_infix ~affix:s line then
-    raise (Stunnel_error s)
+let check_error line =
+  let error_list =
+    [
+      "Configuration failed"
+    ; "Address already in use"
+    ; "Connection refused"
+    ; "No host resolved"
+    ; "No route to host"
+    ; "Invalid argument"
+    ]
+  in
+  List.iter
+    (fun err ->
+      if Astring.String.is_infix ~affix:err line then
+        raise (Stunnel_error err)
+    )
+    error_list
 
 let check_stunnel_logfile logfile =
   let check_line line =
-    !stunnel_logger line ;
-    check_verify_error line ;
-    check_error "Connection refused" line ;
-    check_error "No host resolved" line ;
-    check_error "No route to host" line ;
-    check_error "Invalid argument" line
+    !stunnel_logger line ; check_error line ; check_verify_error line
   in
   Unixext.readfile_line check_line logfile
 
@@ -572,6 +573,17 @@ let wait_for_init_done unix_socket_path logfile =
   in
   check ~max_retries:3 0
 
+let print_logfile logfile =
+  try
+    printf "%s exists: %b\n" logfile (Sys.file_exists logfile) ;
+    let content = Unixext.string_of_file logfile in
+    Printf.printf "Stunnel logfile content:\n%s\n" content ;
+    flush stdout
+  with e ->
+    Printf.printf "Failed to read logfile %s: %s\n" logfile
+      (Printexc.to_string e) ;
+    flush stdout
+
 let with_client_proxy_unix_socket ~verify_cert ~remote_host ~remote_port
     ~unix_socket_path f =
   Unixext.unlink_safe unix_socket_path ;
@@ -590,6 +602,7 @@ let with_client_proxy_unix_socket ~verify_cert ~remote_host ~remote_port
     )
     (fun () ->
       disconnect_with_pid ~wait:false ~force:true pid ;
+      print_logfile logfile ;
       Unixext.unlink_safe unix_socket_path ;
       Unixext.unlink_safe logfile
     )
