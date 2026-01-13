@@ -56,8 +56,8 @@ let raise_timeout timeout =
   raise
     (Api_errors.Server_error (Api_errors.wlb_timeout, [string_of_float timeout]))
 
-let raise_verify_error reason =
-  raise (Api_errors.Server_error (Api_errors.ssl_verify_error, [reason]))
+let raise_verify_error reasons =
+  raise (Api_errors.Server_error (Api_errors.ssl_verify_error, reasons))
 
 let raise_authentication_failed () =
   raise (Api_errors.Server_error (Api_errors.wlb_authentication_failed, []))
@@ -343,8 +343,8 @@ let wlb_request ~__context ~host ~port ~auth ~meth ~params ~handler ~enable_log
       raise_connection_reset ()
   | Xmlrpc_client.Connection_reset ->
       raise_connection_reset ()
-  | Stunnel.Stunnel_verify_error reason ->
-      raise_verify_error reason
+  | Stunnel.Stunnel_verify_error reasons ->
+      raise_verify_error reasons
   | Stunnel.Stunnel_error error_msg as exc -> (
     match error_msg with
     | "Connection refused" ->

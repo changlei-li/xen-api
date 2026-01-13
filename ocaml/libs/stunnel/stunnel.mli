@@ -17,7 +17,7 @@ exception Stunnel_binary_missing
 
 exception Stunnel_error of string
 
-exception Stunnel_verify_error of string
+exception Stunnel_verify_error of string list
 
 val crl_path : string
 
@@ -56,7 +56,7 @@ type t = {
 }
 
 type stunnel_error =
-  | Certificate_verify of string
+  | Certificate_verify of string list
   | Stunnel of string
   | Unknown of string
 
