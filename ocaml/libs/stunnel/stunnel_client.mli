@@ -21,3 +21,6 @@ val pool : unit -> Stunnel.verification_config option
 val appliance : unit -> Stunnel.verification_config option
 
 val external_host : string -> Stunnel.verification_config option
+
+val construct_cert_verification :
+  purpose:string -> Stunnel.verification_config option

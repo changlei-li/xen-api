@@ -574,6 +574,31 @@ let wait_for_init_done unix_socket_path logfile =
   in
   check ~max_retries:3 0
 
+let wait_for_connection_done logfile =
+  let has_connection_attempt logfile =
+    try
+      let content = Unixext.string_of_file logfile in
+      (* Check for indicators that the TLS handshake has been attempted *)
+      Astring.String.is_infix ~affix:"SSL_connect" content
+      || Astring.String.is_infix ~affix:"Connection" content
+      || Astring.String.is_infix ~affix:"certificate" content
+    with e ->
+      D.debug "Exception when checking stunnel log file: %s"
+        (Printexc.to_string e) ;
+      false
+  in
+  let rec check ~max_retries cnt =
+    Thread.delay 0.2 ;
+    match (has_connection_attempt logfile, cnt) with
+    | true, _ ->
+        ()
+    | false, cnt when cnt > max_retries ->
+        raise (Stunnel_error "Timed out waiting for connection attempt")
+    | false, cnt ->
+        check ~max_retries (cnt + 1)
+  in
+  check ~max_retries:10 0
+
 let with_client_proxy_unix_socket ~verify_cert ~remote_host ~remote_port
     ~unix_socket_path f =
   Unixext.unlink_safe unix_socket_path ;
@@ -595,6 +620,145 @@ let with_client_proxy_unix_socket ~verify_cert ~remote_host ~remote_port
       Unixext.unlink_safe unix_socket_path ;
       Unixext.unlink_safe logfile
     )
+
+module UnixSocketProxy = struct
+  (** Handle for a long-running stunnel proxy *)
+  type t = {proxy_pid: pid; proxy_socket_path: string; proxy_logfile: string}
+
+  let socket_path handle = handle.proxy_socket_path
+
+  (** Generate a unique UNIX socket path for the stunnel proxy *)
+  let generate_socket_path ~remote_host ~remote_port =
+    let uuid = Uuidx.(to_string (make ())) in
+    Printf.sprintf "/var/run/stunnel-proxy-%s-%d-%s.sock" remote_host
+      remote_port uuid
+
+  (** Start a long-running stunnel proxy listening on a UNIX socket.
+      Returns Ok handle that must be explicitly stopped with [stop].
+      The stunnel process will continue running until stopped, allowing
+      multiple clients to connect to the UNIX socket over time.
+      If [unix_socket_path] is not provided, a unique path will be generated.
+      Note: This only starts the proxy - it does NOT verify the certificate.
+      Use [check_cert] after starting to verify the remote server's certificate. *)
+  let start ~verify_cert ~remote_host ~remote_port ?unix_socket_path () =
+    try
+      let unix_socket_path =
+        match unix_socket_path with
+        | Some path ->
+            path
+        | None ->
+            generate_socket_path ~remote_host ~remote_port
+      in
+      Unixext.unlink_safe unix_socket_path ;
+      let write_to_log = D.debug "%s: %s" __FUNCTION__ in
+
+      let pid, logfile =
+        attempt_one_connect ~write_to_log ~extended_diagnosis:true
+          (`Unix_socket_path unix_socket_path) verify_cert remote_host
+          remote_port
+      in
+      wait_for_init_done unix_socket_path logfile ;
+      D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d" __FUNCTION__
+        (getpid pid) unix_socket_path remote_host remote_port ;
+      Ok
+        {
+          proxy_pid= pid
+        ; proxy_socket_path= unix_socket_path
+        ; proxy_logfile= logfile
+        }
+    with
+    | Stunnel_error reason ->
+        Error (Stunnel reason)
+    | exn ->
+        Error (Unknown (Printexc.to_string exn))
+
+  let print_log handle =
+    let log = Unixext.string_of_file handle.proxy_logfile in
+    Printf.printf "%s: stunnel proxy log:\n%s" __FUNCTION__ log
+
+  (** Stop a running stunnel proxy and clean up resources.
+      This kills the stunnel process and removes the socket and log files. *)
+  let stop handle =
+    print_log handle ;
+    disconnect_with_pid ~wait:false ~force:true handle.proxy_pid ;
+    Unixext.unlink_safe handle.proxy_socket_path ;
+    Unixext.unlink_safe handle.proxy_logfile ;
+    D.debug "%s: stopped stunnel proxy (pid:%d):%s" __FUNCTION__
+      (getpid handle.proxy_pid) handle.proxy_socket_path
+
+  (** Diagnose the status of a running stunnel proxy by checking its logfile.
+      Returns Ok () if no errors found, Error with details otherwise. *)
+  let diagnose handle =
+    print_log handle ;
+    check_stunnel_status handle.proxy_logfile
+
+  (** Start a proxy, execute a function with it, and automatically stop it.
+      The proxy is guaranteed to be stopped even if the function raises an exception.
+      If [unix_socket_path] is not provided, a unique path will be generated.
+      This is the preferred way to use the proxy for most use cases. *)
+  let with_proxy ~verify_cert ~remote_host ~remote_port ?unix_socket_path f =
+    match start ~verify_cert ~remote_host ~remote_port ?unix_socket_path () with
+    | Error _ as e ->
+        e
+    | Ok handle ->
+        let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
+        finally (fun () -> f handle) (fun () -> stop handle)
+end
+
+(** Fetch the server certificate from a remote host.
+    Uses openssl s_client to connect and retrieve the certificate in PEM format.
+    This is useful for TOFU (Trust-On-First-Use) scenarios. *)
+let fetch_server_cert ~remote_host ~remote_port =
+  try
+    let openssl = !Constants.openssl_path in
+    (* First get the certificate with s_client *)
+    let s_client_args =
+      [
+        "s_client"
+      ; "-connect"
+      ; Printf.sprintf "%s:%d" remote_host remote_port
+      ; "-showcerts"
+      ]
+    in
+    let cert_output, _ =
+      Forkhelpers.execute_command_get_output_send_stdin openssl s_client_args ""
+    in
+    (* Then parse it with x509 to get PEM format *)
+    let x509_args = ["x509"; "-outform"; "PEM"] in
+    let pem_output, _ =
+      Forkhelpers.execute_command_get_output_send_stdin openssl x509_args
+        cert_output
+    in
+    if
+      String.length pem_output > 0
+      && Astring.String.is_infix ~affix:"BEGIN CERTIFICATE" pem_output
+    then
+      Some (String.trim pem_output)
+    else
+      None
+  with _ -> None
+
+(** Check certificate verification using a temporary stunnel connection.
+    This creates an isolated stunnel connection solely for certificate verification.
+    Returns Ok () if certificate is valid, Error with details otherwise. *)
+let check_cert ~verify_cert ~remote_host ~remote_port =
+  UnixSocketProxy.with_proxy ~verify_cert ~remote_host ~remote_port
+    (fun handle ->
+      (* Make one connection to trigger certificate verification *)
+      let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
+      finally
+        (fun () ->
+          (* Connecting to the socket triggers stunnel to establish TLS connection
+             and perform certificate verification *)
+          Unix.connect sock (Unix.ADDR_UNIX handle.proxy_socket_path) ;
+          (* Wait for the connection attempt to complete and be logged *)
+          wait_for_connection_done handle.proxy_logfile
+        )
+        (fun () -> Unix.close sock) ;
+      (* Check the logfile for certificate verification result *)
+      UnixSocketProxy.diagnose handle
+  )
 
 (* If we reach here the whole stunnel log should have been gone through
    (possibly printed/logged somewhere. No necessity to raise an exception,
