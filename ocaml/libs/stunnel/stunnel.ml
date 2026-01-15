@@ -140,6 +140,13 @@ type stunnel_error =
   | Stunnel of string
   | Unknown of string
 
+(** Handle for a long-running stunnel proxy *)
+type proxy_handle = {
+    proxy_pid: pid
+  ; proxy_socket_path: string
+  ; proxy_logfile: string
+}
+
 let appliance =
   {
     sni= None
@@ -595,6 +602,48 @@ let with_client_proxy_unix_socket ~verify_cert ~remote_host ~remote_port
       Unixext.unlink_safe unix_socket_path ;
       Unixext.unlink_safe logfile
     )
+
+let construct_cert_verification ~purpose =
+  let base_dir = "/etc/trusted-certs" in
+  let peer_pem = sprintf "%s/peer-bundle-%s.pem" base_dir purpose in
+  let chain_pem = sprintf "%s/ca-bundle-%s.pem" base_dir purpose in
+  let general_pem = sprintf "%s/ca-bundle-general.pem" base_dir in
+  match
+    ( Sys.file_exists peer_pem
+    , Sys.file_exists chain_pem
+    , Sys.file_exists general_pem
+    )
+  with
+  | true, _, _ ->
+      Some {sni= None; verify= VerifyPeer; cert_bundle_path= peer_pem}
+  | false, true, _ ->
+      Some {sni= None; verify= CheckHost; cert_bundle_path= chain_pem}
+  | false, false, true ->
+      Some {sni= None; verify= CheckHost; cert_bundle_path= general_pem}
+  | false, false, false ->
+      D.debug "%s: No cert bundle found for purpose %s" __FUNCTION__ purpose ;
+      None
+
+let start_client_proxy_unix_socket ~purpose ~remote_host ~remote_port
+    ~unix_socket_path =
+  Unixext.unlink_safe unix_socket_path ;
+  let write_to_log = D.debug "%s: %s" __FUNCTION__ in
+  let verify_cert = construct_cert_verification ~purpose in
+  let pid, logfile =
+    attempt_one_connect ~write_to_log ~extended_diagnosis:true
+      (`Unix_socket_path unix_socket_path) verify_cert remote_host remote_port
+  in
+  wait_for_init_done unix_socket_path logfile ;
+  D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d" __FUNCTION__
+    (getpid pid) unix_socket_path remote_host remote_port ;
+  {proxy_pid= pid; proxy_socket_path= unix_socket_path; proxy_logfile= logfile}
+
+let stop_client_proxy handle =
+  disconnect_with_pid ~wait:false ~force:true handle.proxy_pid ;
+  Unixext.unlink_safe handle.proxy_socket_path ;
+  Unixext.unlink_safe handle.proxy_logfile
+
+let diagnose_client_proxy handle = check_stunnel_status handle.proxy_logfile
 
 (* If we reach here the whole stunnel log should have been gone through
    (possibly printed/logged somewhere. No necessity to raise an exception,

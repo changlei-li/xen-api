@@ -60,6 +60,13 @@ type stunnel_error =
   | Stunnel of string
   | Unknown of string
 
+(** Handle for a long-running stunnel proxy *)
+type proxy_handle = {
+    proxy_pid: pid
+  ; proxy_socket_path: string
+  ; proxy_logfile: string
+}
+
 val appliance : verification_config
 
 val pool : verification_config
@@ -117,3 +124,29 @@ val with_client_proxy_unix_socket :
     accept non-TLS traffic. The provided function (last parameter) can send
     traffic through the [unix_socket_path] to the [remote_host] and [remote_port]
     and check the stunnel error by invoking [diagnose_stunnel ()]. *)
+
+val start_client_proxy_unix_socket :
+     purpose:string
+  -> remote_host:string
+  -> remote_port:int
+  -> unix_socket_path:string
+  -> proxy_handle
+(** Start a long-running stunnel proxy listening on a UNIX socket.
+    Returns a handle that must be explicitly stopped with [stop_client_proxy].
+    The stunnel process will continue running until stopped, allowing
+    multiple clients to connect to the UNIX socket over time.
+    @param purpose Purpose string for certificate verification
+    @param remote_host Remote server hostname
+    @param remote_port Remote server port
+    @param unix_socket_path Path to UNIX socket for accepting connections
+    @return proxy_handle that can be used to diagnose and stop the proxy *)
+
+val stop_client_proxy : proxy_handle -> unit
+(** Stop a running stunnel proxy and clean up resources.
+    This kills the stunnel process and removes the socket and log files.
+    @param handle The proxy handle returned by [start_client_proxy_unix_socket] *)
+
+val diagnose_client_proxy : proxy_handle -> (unit, stunnel_error) result
+(** Diagnose the status of a running stunnel proxy by checking its logfile.
+    @param handle The proxy handle
+    @return Ok () if no errors found, Error with details otherwise *)
