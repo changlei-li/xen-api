@@ -658,8 +658,9 @@ module UnixSocketProxy = struct
           remote_port
       in
       wait_for_init_done unix_socket_path logfile ;
-      D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d" __FUNCTION__
-        (getpid pid) unix_socket_path remote_host remote_port ;
+      D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d log: %s"
+        __FUNCTION__ (getpid pid) unix_socket_path remote_host remote_port
+        logfile ;
       Ok
         {
           proxy_pid= pid
@@ -674,7 +675,7 @@ module UnixSocketProxy = struct
 
   let print_log handle =
     let log = Unixext.string_of_file handle.proxy_logfile in
-    Printf.printf "%s: stunnel proxy log:\n%s" __FUNCTION__ log
+    D.debug "%s: stunnel proxy log:\n%s" __FUNCTION__ log
 
   (** Stop a running stunnel proxy and clean up resources.
       This kills the stunnel process and removes the socket and log files. *)
