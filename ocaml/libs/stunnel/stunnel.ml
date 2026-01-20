@@ -579,16 +579,15 @@ let wait_for_connection_done logfile =
     try
       let content = Unixext.string_of_file logfile in
       (* Check for indicators that the TLS handshake has been attempted *)
-      Astring.String.is_infix ~affix:"SSL_connect" content
-      || Astring.String.is_infix ~affix:"Connection" content
-      || Astring.String.is_infix ~affix:"certificate" content
+      Astring.String.is_infix ~affix:"Certificate accepted" content
+      || Astring.String.is_infix ~affix:"Rejected by CERT" content
     with e ->
       D.debug "Exception when checking stunnel log file: %s"
         (Printexc.to_string e) ;
       false
   in
   let rec check ~max_retries cnt =
-    Thread.delay 0.2 ;
+    Thread.delay 0.5 ;
     match (has_connection_attempt logfile, cnt) with
     | true, _ ->
         ()
