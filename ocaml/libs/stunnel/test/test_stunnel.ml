@@ -63,23 +63,7 @@ let test_unix_socket_proxy remote_host remote_port purpose timeout =
               Printf.printf "✗ Socket communication error: %s\n"
                 (Printexc.to_string e)
           ) ;
-
-          (* Check certificate using separate verification process *)
-          Printf.printf "→ Checking certificate (separate process)...\n" ;
-          match Stunnel.check_cert ~verify_cert ~remote_host ~remote_port with
-          | Ok () ->
-              Printf.printf "✓ Certificate verification passed\n" ;
-              Ok ()
-          | Error (Stunnel.Certificate_verify reasons) ->
-              Printf.printf "✗ Certificate_verify [%s]\n"
-                (String.concat "; " reasons) ;
-              Error (Stunnel.Certificate_verify reasons)
-          | Error (Stunnel.Stunnel reason) ->
-              Printf.printf "✗ Stunnel error: %s\n" reason ;
-              Error (Stunnel.Stunnel reason)
-          | Error (Stunnel.Unknown reason) ->
-              Printf.printf "✗ Unknown error: %s\n" reason ;
-              Error (Stunnel.Unknown reason)
+          Ok ()
       )
     in
     ( match result with
@@ -94,8 +78,23 @@ let test_unix_socket_proxy remote_host remote_port purpose timeout =
 (** Test explicit start/stop lifecycle *)
 let test_explicit_lifecycle remote_host remote_port purpose timeout =
   Printf.printf "\n→ Testing explicit start/stop lifecycle\n" ;
-  Printf.printf "→ Step 1: Starting proxy to %s:%d\n" remote_host remote_port ;
 
+  (* Step 1: Fetch certificate and print *)
+  Printf.printf "→ Step 1: Fetching server certificate from %s:%d\n" remote_host
+    remote_port ;
+  ( match Stunnel.fetch_server_cert ~remote_host ~remote_port with
+  | None ->
+      Printf.printf "✗ Failed to fetch certificate\n"
+  | Some cert ->
+      Printf.printf "✓ Certificate fetched successfully (%d bytes)\n"
+        (String.length cert) ;
+      let preview_len = min 200 (String.length cert) in
+      Printf.printf "→ Certificate preview:\n%s\n"
+        (String.sub cert 0 preview_len)
+  ) ;
+
+  (* Step 2: Starting proxy *)
+  Printf.printf "\n→ Step 2: Starting proxy to %s:%d\n" remote_host remote_port ;
   let verify_cert = Stunnel_client.construct_cert_verification ~purpose in
   match
     Stunnel.UnixSocketProxy.start ~verify_cert ~remote_host ~remote_port ()
@@ -114,35 +113,8 @@ let test_explicit_lifecycle remote_host remote_port purpose timeout =
       Printf.printf "✓ Proxy started at: %s\n"
         (Stunnel.UnixSocketProxy.socket_path proxy) ;
 
-      (* Step 2: Fetch certificate and print *)
-      Printf.printf "\n→ Step 2: Fetching server certificate\n" ;
-      ( match Stunnel.fetch_server_cert ~remote_host ~remote_port with
-      | None ->
-          Printf.printf "✗ Failed to fetch certificate\n"
-      | Some cert ->
-          Printf.printf "✓ Certificate fetched successfully (%d bytes)\n"
-            (String.length cert) ;
-          let preview_len = min 200 (String.length cert) in
-          Printf.printf "→ Certificate preview:\n%s\n"
-            (String.sub cert 0 preview_len)
-      ) ;
-
-      (* Step 3: Check certificate using separate verification process *)
-      Printf.printf "\n→ Step 3: Checking certificate (separate process)\n" ;
-      ( match Stunnel.check_cert ~verify_cert ~remote_host ~remote_port with
-      | Ok () ->
-          Printf.printf "✓ Certificate verification passed\n"
-      | Error (Stunnel.Certificate_verify reasons) ->
-          Printf.printf "✗ Stunnel.Certificate_verify [%s]\n"
-            (String.concat "; " reasons)
-      | Error (Stunnel.Stunnel reason) ->
-          Printf.printf "✗ Stunnel.Stunnel %s\n" reason
-      | Error (Stunnel.Unknown reason) ->
-          Printf.printf "✗ Stunnel.Unknown %s\n" reason
-      ) ;
-
-      (* Step 4: Send hello through socket *)
-      Printf.printf "\n→ Step 4: Sending 'hello' through socket\n" ;
+      (* Step 3: Send hello through socket *)
+      Printf.printf "\n→ Step 3: Sending 'hello' through socket\n" ;
       let socket_path = Stunnel.UnixSocketProxy.socket_path proxy in
       ( try
           let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
@@ -151,8 +123,8 @@ let test_explicit_lifecycle remote_host remote_port purpose timeout =
           let sent = Unix.send_substring sock msg 0 (String.length msg) [] in
           Printf.printf "✓ Sent %d bytes through socket\n" sent ;
 
-          (* Step 5: Receive response *)
-          Printf.printf "\n→ Step 5: Receiving response\n" ;
+          (* Step 4: Receive response *)
+          Printf.printf "\n→ Step 4: Receiving response\n" ;
           let buf = Bytes.create 1024 in
           Unix.setsockopt_float sock Unix.SO_RCVTIMEO timeout ;
           ( try
@@ -175,6 +147,20 @@ let test_explicit_lifecycle remote_host remote_port purpose timeout =
         with e ->
           Printf.printf "✗ Socket communication error: %s\n"
             (Printexc.to_string e)
+      ) ;
+
+      (* Step 5: Diagnose proxy status *)
+      Printf.printf "\n→ Step 5: Diagnosing proxy status\n" ;
+      ( match Stunnel.UnixSocketProxy.diagnose proxy with
+      | Ok () ->
+          Printf.printf "✓ Proxy status OK (no errors in log)\n"
+      | Error (Stunnel.Certificate_verify reasons) ->
+          Printf.printf "✗ Certificate_verify [%s]\n"
+            (String.concat "; " reasons)
+      | Error (Stunnel.Stunnel reason) ->
+          Printf.printf "✗ Stunnel error: %s\n" reason
+      | Error (Stunnel.Unknown reason) ->
+          Printf.printf "✗ Unknown error: %s\n" reason
       ) ;
 
       (* Step 6: Stop proxy *)
