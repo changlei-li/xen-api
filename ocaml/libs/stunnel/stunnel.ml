@@ -538,8 +538,35 @@ let check_stunnel_logfile logfile =
 
 let diagnose_failure st_proc = check_stunnel_logfile st_proc.logfile
 
-let check_stunnel_status logfile =
-  match check_stunnel_logfile logfile with
+(** Check only new log entries since the given position *)
+let check_stunnel_logfile_from_position logfile start_pos =
+  let cert_errors = ref [] in
+  let fd = Unix.openfile logfile [Unix.O_RDONLY] 0 in
+  let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
+  finally
+    (fun () ->
+      let _ = Unix.lseek fd start_pos Unix.SEEK_SET in
+      let ic = Unix.in_channel_of_descr fd in
+      try
+        while true do
+          let line = input_line ic in
+          !stunnel_logger line ;
+          Astring.String.cut ~rev:true ~sep:"CERT: " line
+          |> Option.iter (fun (_, cert_error) ->
+              cert_errors := cert_error :: !cert_errors
+          ) ;
+          check_verify_error !cert_errors line ;
+          check_error "Connection refused" line ;
+          check_error "No host resolved" line ;
+          check_error "No route to host" line ;
+          check_error "Invalid argument" line
+        done
+      with End_of_file -> ()
+    )
+    (fun () -> Unix.close fd)
+
+let check_stunnel_status_from_position logfile start_pos =
+  match check_stunnel_logfile_from_position logfile start_pos with
   | () ->
       Ok ()
   | exception Stunnel_verify_error reasons ->
@@ -600,7 +627,12 @@ let wait_for_connection_done logfile =
 
 module UnixSocketProxy = struct
   (** Handle for a long-running stunnel proxy *)
-  type t = {proxy_pid: pid; proxy_socket_path: string; proxy_logfile: string}
+  type t = {
+      proxy_pid: pid
+    ; proxy_socket_path: string
+    ; proxy_logfile: string
+    ; mutable last_checked_position: int
+  }
 
   let socket_path handle = handle.proxy_socket_path
 
@@ -610,13 +642,55 @@ module UnixSocketProxy = struct
     Printf.sprintf "/var/run/stunnel-proxy-%s-%d-%s.sock" remote_host
       remote_port uuid
 
+  (** Diagnose the status of a running stunnel proxy by checking its logfile.
+      Only checks new log entries since the last call to diagnose.
+      Updates the last_checked_position after checking.
+      Returns Ok () if no errors found, Error with details otherwise. *)
+  let diagnose handle =
+    let start_pos = handle.last_checked_position in
+    let current_size = (Unix.stat handle.proxy_logfile).Unix.st_size in
+
+    if current_size <= start_pos then (
+      D.debug "%s: no new log entries (position %d)" __FUNCTION__ start_pos ;
+      Ok ()
+    ) else (
+      D.debug "%s: checking log from position %d to %d" __FUNCTION__ start_pos
+        current_size ;
+      (* Print new log content for debugging *)
+      let fd = Unix.openfile handle.proxy_logfile [Unix.O_RDONLY] 0 in
+      let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
+      finally
+        (fun () ->
+          let _ = Unix.lseek fd start_pos Unix.SEEK_SET in
+          let len = current_size - start_pos in
+          let buf = Bytes.create len in
+          let n = Unix.read fd buf 0 len in
+          if n > 0 then
+            D.debug "%s: new log content:\n%s" __FUNCTION__
+              (Bytes.sub_string buf 0 n)
+        )
+        (fun () -> Unix.close fd) ;
+      match
+        check_stunnel_status_from_position handle.proxy_logfile start_pos
+      with
+      | Ok () ->
+          handle.last_checked_position <- current_size ;
+          Ok ()
+      | Error _ as e ->
+          handle.last_checked_position <- current_size ;
+          e
+    )
+
   (** Start a long-running stunnel proxy listening on a UNIX socket.
       Returns Ok handle that must be explicitly stopped with [stop].
       The stunnel process will continue running until stopped, allowing
       multiple clients to connect to the UNIX socket over time.
       If [unix_socket_path] is not provided, a unique path will be generated.
-      Note: This only starts the proxy - it does NOT verify the certificate.
-      Use [check_cert] after starting to verify the remote server's certificate. *)
+
+      This function performs initial certificate verification by making a test
+      connection. If certificate verification fails, returns Error and the proxy
+      is not started. If successful, subsequent connections by stubs will also
+      be verified automatically by stunnel. *)
   let start ~verify_cert ~remote_host ~remote_port ?unix_socket_path () =
     try
       let unix_socket_path =
@@ -638,12 +712,39 @@ module UnixSocketProxy = struct
       D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d log: %s"
         __FUNCTION__ (getpid pid) unix_socket_path remote_host remote_port
         logfile ;
-      Ok
+
+      let handle =
         {
           proxy_pid= pid
         ; proxy_socket_path= unix_socket_path
         ; proxy_logfile= logfile
+        ; last_checked_position= 0
         }
+      in
+
+      (* Make initial connection to verify certificate *)
+      let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
+      finally
+        (fun () ->
+          Unix.connect sock (Unix.ADDR_UNIX unix_socket_path) ;
+          (* Wait for TLS handshake and certificate verification *)
+          wait_for_connection_done logfile
+        )
+        (fun () -> Unix.close sock) ;
+
+      (* Check for certificate verification errors using diagnose *)
+      match diagnose handle with
+      | Ok () ->
+          D.debug "%s: initial certificate verification passed" __FUNCTION__ ;
+          Ok handle
+      | Error e ->
+          (* Certificate verification failed, clean up *)
+          D.debug "%s: initial certificate verification failed" __FUNCTION__ ;
+          disconnect_with_pid ~wait:false ~force:true pid ;
+          Unixext.unlink_safe unix_socket_path ;
+          Unixext.unlink_safe logfile ;
+          Error e
     with
     | Stunnel_error reason ->
         Error (Stunnel reason)
@@ -663,12 +764,6 @@ module UnixSocketProxy = struct
     Unixext.unlink_safe handle.proxy_logfile ;
     D.debug "%s: stopped stunnel proxy (pid:%d):%s" __FUNCTION__
       (getpid handle.proxy_pid) handle.proxy_socket_path
-
-  (** Diagnose the status of a running stunnel proxy by checking its logfile.
-      Returns Ok () if no errors found, Error with details otherwise. *)
-  let diagnose handle =
-    print_log handle ;
-    check_stunnel_status handle.proxy_logfile
 
   (** Start a proxy, execute a function with it, and automatically stop it.
       The proxy is guaranteed to be stopped even if the function raises an exception.
@@ -715,28 +810,6 @@ let fetch_server_cert ~remote_host ~remote_port =
     else
       None
   with _ -> None
-
-(** Check certificate verification using a temporary stunnel connection.
-    This creates an isolated stunnel connection solely for certificate verification.
-    Returns Ok () if certificate is valid, Error with details otherwise. *)
-let check_cert ~verify_cert ~remote_host ~remote_port =
-  UnixSocketProxy.with_proxy ~verify_cert ~remote_host ~remote_port
-    (fun handle ->
-      (* Make one connection to trigger certificate verification *)
-      let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-      let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
-      finally
-        (fun () ->
-          (* Connecting to the socket triggers stunnel to establish TLS connection
-             and perform certificate verification *)
-          Unix.connect sock (Unix.ADDR_UNIX handle.proxy_socket_path) ;
-          (* Wait for the connection attempt to complete and be logged *)
-          wait_for_connection_done handle.proxy_logfile
-        )
-        (fun () -> Unix.close sock) ;
-      (* Check the logfile for certificate verification result *)
-      UnixSocketProxy.diagnose handle
-  )
 
 (* If we reach here the whole stunnel log should have been gone through
    (possibly printed/logged somewhere. No necessity to raise an exception,

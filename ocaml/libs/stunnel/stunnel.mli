@@ -78,20 +78,18 @@ module UnixSocketProxy : sig
     -> unit
     -> (t, stunnel_error) result
   (** Start a long-running stunnel proxy listening on a UNIX socket.
-      Returns Ok handle that must be explicitly stopped with [stop].
-      The stunnel process will continue running until stopped, allowing
-      multiple clients to connect to the UNIX socket over time.
-      Returns Error if stunnel fails to start or initialize.
-      
+
+      This function starts the proxy and immediately performs certificate
+      verification by making an initial test connection. If certificate 
+      verification fails, the proxy is stopped and cleaned up automatically.
+
+      Returns [Ok handle] if stunnel starts successfully and the certificate
+      is valid. Returns [Error] if stunnel fails to start, initialize, or
+      if certificate verification fails.
+
       If [unix_socket_path] is not provided, a unique path will be generated
       automatically in /var/run with the format:
-      stunnel-proxy-{host}-{port}-{uuid}.sock
-      
-      Note: This only starts the proxy - it does NOT verify the certificate.
-      The TLS connection and certificate verification happen when a client
-      actually connects through the socket. Use the standalone [check_cert] 
-      function to verify the remote server's certificate before starting the 
-      proxy if needed. *)
+      stunnel-proxy-{host}-{port}-{uuid}.sock *)
 
   val stop : t -> unit
   (** Stop a running stunnel proxy and clean up resources.
@@ -99,7 +97,12 @@ module UnixSocketProxy : sig
 
   val diagnose : t -> (unit, stunnel_error) result
   (** Diagnose the status of a running stunnel proxy by checking its logfile.
-      Returns Ok () if no errors found, Error with details otherwise. *)
+
+      Only checks NEW log entries since the last call to [diagnose] (or since
+      [start] if never called). This allows efficient monitoring of connection
+      failures that occur after the initial certificate verification.
+
+      Returns [Ok ()] if no new errors found, [Error] with details otherwise. *)
 
   val with_proxy :
        verify_cert:verification_config option
@@ -118,21 +121,6 @@ val fetch_server_cert : remote_host:string -> remote_port:int -> string option
 (** Fetch the server certificate from a remote host.
     Uses openssl s_client to connect and retrieve the certificate in PEM format.
     This is useful for TOFU (Trust-On-First-Use) scenarios. *)
-
-val check_cert :
-     verify_cert:verification_config option
-  -> remote_host:string
-  -> remote_port:int
-  -> (unit, stunnel_error) result
-(** Check certificate verification using a temporary stunnel connection.
-    Returns [Ok ()] if the certificate is valid according to the verification
-    policy (VerifyPeer or CheckHost), or [Error] with details if verification fails.
-
-    This creates an isolated, temporary stunnel connection solely for certificate 
-    verification. The connection is automatically cleaned up after the check.
-
-    This is useful for pre-flight certificate validation before starting a 
-    long-running proxy, or for periodic re-validation of certificates. *)
 
 val appliance : verification_config
 
