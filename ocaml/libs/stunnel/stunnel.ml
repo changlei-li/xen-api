@@ -598,28 +598,6 @@ let wait_for_connection_done logfile =
   in
   check ~max_retries:10 0
 
-let with_client_proxy_unix_socket ~verify_cert ~remote_host ~remote_port
-    ~unix_socket_path f =
-  Unixext.unlink_safe unix_socket_path ;
-  let write_to_log = D.debug "%s: %s" __FUNCTION__ in
-  let pid, logfile =
-    attempt_one_connect ~write_to_log ~extended_diagnosis:true
-      (`Unix_socket_path unix_socket_path) verify_cert remote_host remote_port
-  in
-  let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
-  finally
-    (fun () ->
-      wait_for_init_done unix_socket_path logfile ;
-      D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d" __FUNCTION__
-        (getpid pid) unix_socket_path remote_host remote_port ;
-      f ~diagnose_stunnel:(fun () -> check_stunnel_status logfile)
-    )
-    (fun () ->
-      disconnect_with_pid ~wait:false ~force:true pid ;
-      Unixext.unlink_safe unix_socket_path ;
-      Unixext.unlink_safe logfile
-    )
-
 module UnixSocketProxy = struct
   (** Handle for a long-running stunnel proxy *)
   type t = {proxy_pid: pid; proxy_socket_path: string; proxy_logfile: string}
