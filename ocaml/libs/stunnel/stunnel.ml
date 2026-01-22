@@ -13,9 +13,7 @@
  *)
 (* Copyright (C) 2007 XenSource Inc *)
 
-module D = struct
-  let debug fmt = Printf.ksprintf (fun s -> Printf.printf "%s\n%!" s) fmt
-end
+module D = Debug.Make (struct let name = "stunnel" end)
 
 open Printf
 open Xapi_stdext_unix
