@@ -39,17 +39,17 @@ let external_host cert_file =
 let construct_cert_verification ~purpose =
   let open Stunnel in
   let base_dir = "/etc/trusted-certs" in
-  let peer_pem = Printf.sprintf "%s/peer-bundle-%s.pem" base_dir purpose in
+  let pinned_pem = Printf.sprintf "%s/pinned-bundle-%s.pem" base_dir purpose in
   let chain_pem = Printf.sprintf "%s/ca-bundle-%s.pem" base_dir purpose in
   let general_pem = Printf.sprintf "%s/ca-bundle-general.pem" base_dir in
   match
-    ( Sys.file_exists peer_pem
+    ( Sys.file_exists pinned_pem
     , Sys.file_exists chain_pem
     , Sys.file_exists general_pem
     )
   with
   | true, _, _ ->
-      Some {sni= None; verify= VerifyPeer; cert_bundle_path= peer_pem}
+      Some {sni= None; verify= VerifyPeer; cert_bundle_path= pinned_pem}
   | false, true, _ ->
       Some {sni= None; verify= CheckHost; cert_bundle_path= chain_pem}
   | false, false, true ->
