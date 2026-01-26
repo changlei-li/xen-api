@@ -608,6 +608,7 @@ let wait_for_connection_done logfile =
       (* Check for indicators that the TLS handshake has been attempted *)
       Astring.String.is_infix ~affix:"Certificate accepted" content
       || Astring.String.is_infix ~affix:"Rejected by CERT" content
+      || Astring.String.is_infix ~affix:"connected remote server from" content
     with e ->
       D.debug "Exception when checking stunnel log file: %s"
         (Printexc.to_string e) ;
