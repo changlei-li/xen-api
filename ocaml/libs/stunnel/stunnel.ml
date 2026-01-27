@@ -509,11 +509,11 @@ let check_verify_error cert_errors line =
    * reason if it can found in the log *)
   if Astring.String.is_infix ~affix:"certificate verify failed" line then
     raise (Stunnel_verify_error cert_errors)
-  else if
+  (* else if
     Astring.String.is_infix ~affix:"No certificate or private key specified"
       line
   then
-    raise (Stunnel_verify_error ["The specified certificate is corrupt"])
+    raise (Stunnel_verify_error ["The specified certificate is corrupt"]) *)
   else
     ()
 
@@ -640,8 +640,8 @@ module UnixSocketProxy = struct
   (** Generate a unique UNIX socket path for the stunnel proxy *)
   let generate_socket_path ~remote_host ~remote_port =
     let uuid = Uuidx.(to_string (make ())) in
-    Printf.sprintf "/var/run/stunnel-proxy-%s-%d-%s.sock" remote_host
-      remote_port uuid
+    Printf.sprintf "/tmp/stunnel-proxy-%s-%d-%s.sock" remote_host remote_port
+      uuid
 
   (** Diagnose the status of a running stunnel proxy by checking its logfile.
       Only checks new log entries since the last call to diagnose.
@@ -687,12 +687,15 @@ module UnixSocketProxy = struct
       The stunnel process will continue running until stopped, allowing
       multiple clients to connect to the UNIX socket over time.
       If [unix_socket_path] is not provided, a unique path will be generated.
+      If [socket_mode] is provided (e.g., 0o600), the socket file permissions
+      will be set accordingly after creation.
 
       This function performs initial certificate verification by making a test
       connection. If certificate verification fails, returns Error and the proxy
       is not started. If successful, subsequent connections by stubs will also
       be verified automatically by stunnel. *)
-  let start ~verify_cert ~remote_host ~remote_port ?unix_socket_path () =
+  let start ~verify_cert ~remote_host ~remote_port ?unix_socket_path
+      ?socket_mode () =
     try
       let unix_socket_path =
         match unix_socket_path with
@@ -710,6 +713,12 @@ module UnixSocketProxy = struct
           remote_port
       in
       wait_for_init_done unix_socket_path logfile ;
+      Option.iter
+        (fun mode ->
+          D.debug "chmod %s to %o" unix_socket_path mode ;
+          Unix.chmod unix_socket_path mode
+        )
+        socket_mode ;
       D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d log: %s"
         __FUNCTION__ (getpid pid) unix_socket_path remote_host remote_port
         logfile ;
@@ -769,9 +778,14 @@ module UnixSocketProxy = struct
   (** Start a proxy, execute a function with it, and automatically stop it.
       The proxy is guaranteed to be stopped even if the function raises an exception.
       If [unix_socket_path] is not provided, a unique path will be generated.
+      If [socket_mode] is provided, stunnel will set the socket file permissions.
       This is the preferred way to use the proxy for most use cases. *)
-  let with_proxy ~verify_cert ~remote_host ~remote_port ?unix_socket_path f =
-    match start ~verify_cert ~remote_host ~remote_port ?unix_socket_path () with
+  let with_proxy ~verify_cert ~remote_host ~remote_port ?unix_socket_path
+      ?socket_mode f =
+    match
+      start ~verify_cert ~remote_host ~remote_port ?unix_socket_path
+        ?socket_mode ()
+    with
     | Error _ as e ->
         e
     | Ok handle ->

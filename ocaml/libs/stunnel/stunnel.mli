@@ -75,6 +75,7 @@ module UnixSocketProxy : sig
     -> remote_host:string
     -> remote_port:int
     -> ?unix_socket_path:string
+    -> ?socket_mode:int
     -> unit
     -> (t, stunnel_error) result
   (** Start a long-running stunnel proxy listening on a UNIX socket.
@@ -89,7 +90,10 @@ module UnixSocketProxy : sig
 
       If [unix_socket_path] is not provided, a unique path will be generated
       automatically in /var/run with the format:
-      stunnel-proxy-{host}-{port}-{uuid}.sock *)
+      stunnel-proxy-{host}-{port}-{uuid}.sock
+
+      If [socket_mode] is provided (e.g., [~socket_mode:0o666]), the socket
+      file permissions will be set accordingly after creation using chmod. *)
 
   val stop : t -> unit
   (** Stop a running stunnel proxy and clean up resources.
@@ -109,11 +113,13 @@ module UnixSocketProxy : sig
     -> remote_host:string
     -> remote_port:int
     -> ?unix_socket_path:string
+    -> ?socket_mode:int
     -> (t -> ('a, stunnel_error) result)
     -> ('a, stunnel_error) result
   (** Start a proxy, execute a function with it, and automatically stop it.
       The proxy is guaranteed to be stopped even if the function raises an exception.
       If [unix_socket_path] is not provided, a unique path will be generated.
+      If [socket_mode] is provided, stunnel will set the socket file permissions.
       This is the preferred way to use the proxy for most use cases. *)
 end
 
