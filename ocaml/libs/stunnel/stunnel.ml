@@ -517,8 +517,18 @@ let check_verify_error cert_errors line =
   else
     ()
 
-let check_error s line =
-  if Astring.String.is_infix ~affix:s line then raise (Stunnel_error s)
+let check_error line =
+  [
+    "Configuration failed"
+  ; "Connection refused"
+  ; "No host resolved"
+  ; "No route to host"
+  ; "Invalid argument"
+  ; "Address already in use"
+  ]
+  |> List.iter (fun s ->
+      if Astring.String.is_infix ~affix:s line then raise (Stunnel_error s)
+  )
 
 let check_stunnel_logfile logfile =
   let cert_errors = ref [] in
@@ -529,10 +539,7 @@ let check_stunnel_logfile logfile =
         cert_errors := cert_error :: !cert_errors
     ) ;
     check_verify_error !cert_errors line ;
-    check_error "Connection refused" line ;
-    check_error "No host resolved" line ;
-    check_error "No route to host" line ;
-    check_error "Invalid argument" line
+    check_error line
   in
   Unixext.readfile_line check_line logfile
 
@@ -556,10 +563,7 @@ let check_stunnel_logfile_from_position logfile start_pos =
               cert_errors := cert_error :: !cert_errors
           ) ;
           check_verify_error !cert_errors line ;
-          check_error "Connection refused" line ;
-          check_error "No host resolved" line ;
-          check_error "No route to host" line ;
-          check_error "Invalid argument" line
+          check_error line
         done
       with End_of_file -> ()
     )
@@ -758,6 +762,8 @@ module UnixSocketProxy = struct
     with
     | Stunnel_error reason ->
         Error (Stunnel reason)
+    | Stunnel_verify_error reasons ->
+        Error (Certificate_verify reasons)
     | exn ->
         Error (Unknown (Printexc.to_string exn))
 
