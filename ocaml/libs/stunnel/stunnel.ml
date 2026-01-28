@@ -25,7 +25,11 @@ exception Stunnel_error of string
 
 exception Stunnel_verify_error of string list
 
-let crl_path = "/etc/stunnel/crls"
+(* Re-export types from Stunnel_log for convenience *)
+type stunnel_error = Stunnel_log.stunnel_error =
+  | Certificate_verify of string list
+  | Stunnel of string
+  | Unknown of string
 
 let cached_stunnel_path = ref None
 
@@ -37,38 +41,23 @@ let init_stunnel_path () =
   cached_stunnel_path :=
     Some
       ( match Sys.getenv_opt "XE_STUNNEL" with
-      | Some x ->
-          x
-      | None ->
-          let choices =
-            [
-              "/opt/xensource/libexec/stunnel/stunnel"
-            ; "/usr/sbin/stunnel4"
-            ; "/usr/sbin/stunnel"
-            ; "/usr/bin/stunnel4"
-            ; "/usr/bin/stunnel"
-            ]
-          in
-
-          let choose l =
-            match
-              List.find_opt
-                (fun el ->
-                  try Unix.access el [Unix.X_OK] ; true with _ -> false
-                )
-                l
-            with
-            | Some p ->
-                p
-            | None ->
-                raise Stunnel_binary_missing
-          in
-          let path = choose choices in
-          path
+      | Some "stunnel" ->
+          "/usr/bin/stunnel"
+      | Some "stunnel4" ->
+          "/usr/bin/stunnel4"
+      | _ ->
+          if Sys.file_exists "/usr/bin/stunnel4" then
+            "/usr/bin/stunnel4"
+          else if Sys.file_exists "/usr/bin/stunnel" then
+            "/usr/bin/stunnel"
+          else
+            "/usr/bin/stunnel"
       )
 
+let crl_path = "/etc/stunnel/crl"
+
 let stunnel_path () =
-  if Option.is_none !cached_stunnel_path then init_stunnel_path () ;
+  (match !cached_stunnel_path with None -> init_stunnel_path () | Some _ -> ()) ;
   Option.get !cached_stunnel_path
 
 module Unsafe = struct
@@ -134,11 +123,6 @@ type t = {
   ; mutable logfile: string
   ; verified: verification_config option
 }
-
-type stunnel_error =
-  | Certificate_verify of string list
-  | Stunnel of string
-  | Unknown of string
 
 let appliance =
   {
@@ -501,131 +485,88 @@ let with_client_proxy_systemd_service ~verify_cert ~remote_host ~remote_port
     )
     (fun () -> Unixext.unlink_safe conf_path)
 
-let check_verify_error cert_errors line =
-  (* When verified with a mismatched certificate, one line of log from stunnel
-   * would look like:
-     SSL_connect: ssl/statem/statem_clnt.c:1889: error:0A000086:SSL routines::certificate verify failed
-   * in this case, Stunnel_verify_error can be raised with detailed error as
-   * reason if it can found in the log *)
-  if Astring.String.is_infix ~affix:"certificate verify failed" line then
-    raise (Stunnel_verify_error cert_errors)
-  (* else if
-    Astring.String.is_infix ~affix:"No certificate or private key specified"
-      line
-  then
-    raise (Stunnel_verify_error ["The specified certificate is corrupt"]) *)
-  else
-    ()
+(** Old exception-based function kept for public API compatibility. *)
+let diagnose_failure st_proc =
+  let module Scanner = Stunnel_log.Make (struct
+    let logfile = st_proc.logfile
 
-let check_error line =
-  [
-    "Configuration failed"
-  ; "Connection refused"
-  ; "No host resolved"
-  ; "No route to host"
-  ; "Invalid argument"
-  ; "Address already in use"
-  ]
-  |> List.iter (fun s ->
-      if Astring.String.is_infix ~affix:s line then raise (Stunnel_error s)
-  )
-
-let check_stunnel_logfile logfile =
-  let cert_errors = ref [] in
-  let check_line line =
-    !stunnel_logger line ;
-    Astring.String.cut ~rev:true ~sep:"CERT: " line
-    |> Option.iter (fun (_, cert_error) ->
-        cert_errors := cert_error :: !cert_errors
-    ) ;
-    check_verify_error !cert_errors line ;
-    check_error line
-  in
-  Unixext.readfile_line check_line logfile
-
-let diagnose_failure st_proc = check_stunnel_logfile st_proc.logfile
-
-(** Check only new log entries since the given position *)
-let check_stunnel_logfile_from_position logfile start_pos =
-  let cert_errors = ref [] in
-  let fd = Unix.openfile logfile [Unix.O_RDONLY] 0 in
-  let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
-  finally
-    (fun () ->
-      let _ = Unix.lseek fd start_pos Unix.SEEK_SET in
-      let ic = Unix.in_channel_of_descr fd in
-      try
-        while true do
-          let line = input_line ic in
-          !stunnel_logger line ;
-          Astring.String.cut ~rev:true ~sep:"CERT: " line
-          |> Option.iter (fun (_, cert_error) ->
-              cert_errors := cert_error :: !cert_errors
-          ) ;
-          check_verify_error !cert_errors line ;
-          check_error line
-        done
-      with End_of_file -> ()
-    )
-    (fun () -> Unix.close fd)
-
-let check_stunnel_status_from_position logfile start_pos =
-  match check_stunnel_logfile_from_position logfile start_pos with
-  | () ->
-      Ok ()
-  | exception Stunnel_verify_error reasons ->
-      Error (Certificate_verify reasons)
-  | exception Stunnel_error reason ->
-      Error (Stunnel reason)
-  | exception exn ->
-      let reason = Printexc.to_string exn in
-      Error (Unknown reason)
+    let logger = fun _ -> ()
+  end) in
+  match Scanner.check_errors () with
+  | Ok () ->
+      ()
+  | Error (Certificate_verify reasons) ->
+      raise (Stunnel_verify_error reasons)
+  | Error (Stunnel reason) ->
+      raise (Stunnel_error reason)
+  | Error (Unknown reason) ->
+      failwith reason
 
 let wait_for_init_done unix_socket_path logfile =
-  let has_done logfile =
-    let s = "Configuration successful" in
-    try
-      let content = Unixext.string_of_file logfile in
-      Astring.String.is_infix ~affix:s content
-    with e ->
-      D.debug "Exception when checking stunnel log file: %s"
-        (Printexc.to_string e) ;
-      false
+  let module Scanner = Stunnel_log.Make (struct
+    let logfile = logfile
+
+    let logger = fun _ -> ()
+  end) in
+  let patterns =
+    Stunnel_log.Patterns.
+      [
+        configuration_successful
+      ; configuration_failed
+      ; certificate_verify_failed
+      ; connection_refused
+      ; no_host_resolved
+      ; no_route_to_host
+      ; invalid_argument
+      ; address_in_use
+      ]
   in
   let rec check ~max_retries cnt =
     Thread.delay 1.0 ;
-    check_stunnel_logfile logfile ;
-    match (Sys.file_exists unix_socket_path && has_done logfile, cnt) with
-    | true, _ ->
-        ()
-    | false, cnt when cnt > max_retries ->
-        raise (Stunnel_error "Timed out when initialising stunnel")
-    | false, cnt ->
+    match
+      (Sys.file_exists unix_socket_path, Scanner.scan_with_cert_context patterns)
+    with
+    | true, Ok (`Success _) ->
+        Ok ()
+    | _, Error err ->
+        Error err
+    | _, _ when cnt > max_retries ->
+        Error (Stunnel "Timed out when initialising stunnel")
+    | _, _ ->
         check ~max_retries (cnt + 1)
   in
   check ~max_retries:3 0
 
 let wait_for_connection_done logfile =
-  let has_connection_attempt logfile =
-    try
-      let content = Unixext.string_of_file logfile in
-      (* Check for indicators that the TLS handshake has been attempted *)
-      Astring.String.is_infix ~affix:"Certificate accepted" content
-      || Astring.String.is_infix ~affix:"Rejected by CERT" content
-      || Astring.String.is_infix ~affix:"connected remote server from" content
-    with e ->
-      D.debug "Exception when checking stunnel log file: %s"
-        (Printexc.to_string e) ;
-      false
+  let module Scanner = Stunnel_log.Make (struct
+    let logfile = logfile
+
+    let logger = fun _ -> ()
+  end) in
+  let patterns =
+    Stunnel_log.Patterns.
+      [
+        certificate_accepted
+      ; rejected_by_cert
+      ; connected_remote_server
+      ; certificate_verify_failed
+      ; connection_refused
+      ; no_host_resolved
+      ; no_route_to_host
+      ; invalid_argument
+      ; address_in_use
+      ]
   in
   let rec check ~max_retries cnt =
     Thread.delay 0.5 ;
-    match (has_connection_attempt logfile, cnt) with
-    | true, _ ->
-        ()
-    | false, cnt when cnt > max_retries ->
-        raise (Stunnel_error "Timed out waiting for connection attempt")
-    | false, cnt ->
+    match Scanner.scan_with_cert_context patterns with
+    | Ok (`Success _) ->
+        Ok ()
+    | Error err ->
+        Error err
+    | _ when cnt > max_retries ->
+        Error (Stunnel "Timed out waiting for connection attempt")
+    | _ ->
         check ~max_retries (cnt + 1)
   in
   check ~max_retries:10 0
@@ -675,9 +616,12 @@ module UnixSocketProxy = struct
               (Bytes.sub_string buf 0 n)
         )
         (fun () -> Unix.close fd) ;
-      match
-        check_stunnel_status_from_position handle.proxy_logfile start_pos
-      with
+      let module Scanner = Stunnel_log.Make (struct
+        let logfile = handle.proxy_logfile
+
+        let logger = fun _ -> ()
+      end) in
+      match Scanner.check_errors_from_position start_pos with
       | Ok () ->
           handle.last_checked_position <- current_size ;
           Ok ()
@@ -700,72 +644,104 @@ module UnixSocketProxy = struct
       be verified automatically by stunnel. *)
   let start ~verify_cert ~remote_host ~remote_port ?unix_socket_path
       ?socket_mode () =
-    try
-      let unix_socket_path =
-        match unix_socket_path with
-        | Some path ->
-            path
-        | None ->
-            generate_socket_path ~remote_host ~remote_port
-      in
+    let ( let* ) = Result.bind in
+    let unix_socket_path =
+      match unix_socket_path with
+      | Some path ->
+          path
+      | None ->
+          generate_socket_path ~remote_host ~remote_port
+    in
+    Unixext.unlink_safe unix_socket_path ;
+    let write_to_log = D.debug "%s: %s" __FUNCTION__ in
+
+    (* Helper: convert exceptions to Results *)
+    let try_result f =
+      try Ok (f ()) with
+      | Stunnel_initialisation_failed ->
+          Error (Stunnel "Stunnel initialisation failed")
+      | Stunnel_error reason ->
+          Error (Stunnel reason)
+      | Stunnel_verify_error reasons ->
+          Error (Certificate_verify reasons)
+      | exn ->
+          Error (Unknown (Printexc.to_string exn))
+    in
+
+    (* Phase 0: Start stunnel process *)
+    let* pid, logfile =
+      try_result (fun () ->
+          attempt_one_connect ~write_to_log ~extended_diagnosis:true
+            (`Unix_socket_path unix_socket_path) verify_cert remote_host
+            remote_port
+      )
+    in
+
+    (* From here on, we must clean up if anything fails *)
+    let cleanup_all () =
+      disconnect_with_pid ~wait:false ~force:true pid ;
       Unixext.unlink_safe unix_socket_path ;
-      let write_to_log = D.debug "%s: %s" __FUNCTION__ in
+      Unixext.unlink_safe logfile
+    in
 
-      let pid, logfile =
-        attempt_one_connect ~write_to_log ~extended_diagnosis:true
-          (`Unix_socket_path unix_socket_path) verify_cert remote_host
-          remote_port
-      in
-      wait_for_init_done unix_socket_path logfile ;
-      Option.iter
-        (fun mode ->
-          D.debug "chmod %s to %o" unix_socket_path mode ;
-          Unix.chmod unix_socket_path mode
-        )
-        socket_mode ;
-      D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d log: %s"
-        __FUNCTION__ (getpid pid) unix_socket_path remote_host remote_port
-        logfile ;
+    (* Phase 1: Wait for initialization *)
+    let* () =
+      wait_for_init_done unix_socket_path logfile
+      |> Result.map_error (fun e ->
+          D.debug "%s: stunnel initialization failed" __FUNCTION__ ;
+          cleanup_all () ;
+          e
+      )
+    in
 
-      let handle =
-        {
-          proxy_pid= pid
-        ; proxy_socket_path= unix_socket_path
-        ; proxy_logfile= logfile
-        ; last_checked_position= 0
-        }
-      in
+    (* Set socket permissions if requested *)
+    let* () =
+      try_result (fun () ->
+          Option.iter
+            (fun mode ->
+              D.debug "chmod %s to %o" unix_socket_path mode ;
+              Unix.chmod unix_socket_path mode
+            )
+            socket_mode
+      )
+      |> Result.map_error (fun e -> cleanup_all () ; e)
+    in
 
-      (* Make initial connection to verify certificate *)
+    D.debug "%s: started stunnel proxy (pid:%d):%s -> %s:%d log: %s"
+      __FUNCTION__ (getpid pid) unix_socket_path remote_host remote_port logfile ;
+
+    (* Create handle *)
+    let handle =
+      {
+        proxy_pid= pid
+      ; proxy_socket_path= unix_socket_path
+      ; proxy_logfile= logfile
+      ; last_checked_position= 0
+      }
+    in
+
+    (* Phase 2: Test connection and wait for TLS handshake *)
+    let* () =
       let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
       let finally = Xapi_stdext_pervasives.Pervasiveext.finally in
-      finally
-        (fun () ->
-          Unix.connect sock (Unix.ADDR_UNIX unix_socket_path) ;
-          (* Wait for TLS handshake and certificate verification *)
-          wait_for_connection_done logfile
-        )
-        (fun () -> Unix.close sock) ;
+      let result =
+        finally
+          (fun () ->
+            Unix.connect sock (Unix.ADDR_UNIX unix_socket_path) ;
+            wait_for_connection_done logfile
+          )
+          (fun () -> Unix.close sock)
+      in
+      result
+      |> Result.map_error (fun e ->
+          D.debug "%s: connection verification failed" __FUNCTION__ ;
+          cleanup_all () ;
+          e
+      )
+    in
 
-      (* Check for certificate verification errors using diagnose *)
-      match diagnose handle with
-      | Ok () ->
-          D.debug "%s: initial certificate verification passed" __FUNCTION__ ;
-          Ok handle
-      | Error e ->
-          (* Certificate verification failed, clean up *)
-          D.debug "%s: initial certificate verification failed" __FUNCTION__ ;
-          disconnect_with_pid ~wait:false ~force:true pid ;
-          Unixext.unlink_safe unix_socket_path ;
-          Unixext.unlink_safe logfile ;
-          Error e
-    with
-    | Stunnel_error reason ->
-        Error (Stunnel reason)
-    | Stunnel_verify_error reasons ->
-        Error (Certificate_verify reasons)
-    | exn ->
-        Error (Unknown (Printexc.to_string exn))
+    D.debug "%s: initial certificate verification passed" __FUNCTION__ ;
+    Ok handle
 
   let print_log handle =
     let log = Unixext.string_of_file handle.proxy_logfile in
