@@ -55,11 +55,6 @@ type t = {
   ; verified: verification_config option
 }
 
-type stunnel_error =
-  | Certificate_verify of string list
-  | Stunnel of string
-  | Unknown of string
-
 module UnixSocketProxy : sig
   (** Handle for a long-running stunnel proxy that exposes TLS connection
       via a UNIX socket file *)
@@ -76,20 +71,25 @@ module UnixSocketProxy : sig
     -> remote_port:int
     -> ?unix_socket_path:string
     -> ?socket_mode:int
+    -> ?test_connection:bool
     -> unit
-    -> (t, stunnel_error) result
+    -> (t, Stunnel_error.t) result
   (** Start a long-running stunnel proxy listening on a UNIX socket.
 
-      This function starts the proxy and immediately performs certificate
-      verification by making an initial test connection. If certificate 
-      verification fails, the proxy is stopped and cleaned up automatically.
+      Returns [Ok handle] if stunnel starts successfully. If [test_connection]
+      is [true] (the default), performs an immediate certificate verification
+      test connection. If certificate verification fails, the proxy is stopped
+      and cleaned up automatically.
 
-      Returns [Ok handle] if stunnel starts successfully and the certificate
-      is valid. Returns [Error] if stunnel fails to start, initialize, or
-      if certificate verification fails.
+      Set [~test_connection:false] to skip the initial connection test and
+      only verify that stunnel initializes successfully. Certificate validation
+      will then happen on the first actual connection.
+
+      Returns [Error] if stunnel fails to start, initialize, or (when
+      [test_connection] is [true]) if certificate verification fails.
 
       If [unix_socket_path] is not provided, a unique path will be generated
-      automatically in /var/run with the format:
+      automatically in /tmp with the format:
       stunnel-proxy-{host}-{port}-{uuid}.sock
 
       If [socket_mode] is provided (e.g., [~socket_mode:0o666]), the socket
@@ -99,7 +99,7 @@ module UnixSocketProxy : sig
   (** Stop a running stunnel proxy and clean up resources.
       This kills the stunnel process and removes the socket and log files. *)
 
-  val diagnose : t -> (unit, stunnel_error) result
+  val diagnose : t -> (unit, Stunnel_error.t) result
   (** Diagnose the status of a running stunnel proxy by checking its logfile.
 
       Only checks NEW log entries since the last call to [diagnose] (or since
@@ -114,12 +114,14 @@ module UnixSocketProxy : sig
     -> remote_port:int
     -> ?unix_socket_path:string
     -> ?socket_mode:int
-    -> (t -> ('a, stunnel_error) result)
-    -> ('a, stunnel_error) result
+    -> ?test_connection:bool
+    -> (t -> ('a, Stunnel_error.t) result)
+    -> ('a, Stunnel_error.t) result
   (** Start a proxy, execute a function with it, and automatically stop it.
       The proxy is guaranteed to be stopped even if the function raises an exception.
       If [unix_socket_path] is not provided, a unique path will be generated.
       If [socket_mode] is provided, stunnel will set the socket file permissions.
+      If [test_connection] is [true] (default), performs initial certificate verification.
       This is the preferred way to use the proxy for most use cases. *)
 end
 

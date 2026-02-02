@@ -102,11 +102,11 @@ let test_explicit_lifecycle remote_host remote_port purpose timeout =
   | Error err ->
       Printf.printf "✗ Failed to start proxy: %s\n"
         ( match err with
-        | Stunnel.Certificate_verify reasons ->
+        | Stunnel_error.Certificate_verify reasons ->
             "Certificate_verify [" ^ String.concat "; " reasons ^ "]"
-        | Stunnel.Stunnel reason ->
+        | Stunnel_error.Stunnel reason ->
             "Stunnel: " ^ reason
-        | Stunnel.Unknown reason ->
+        | Stunnel_error.Unknown reason ->
             "Unknown: " ^ reason
         )
   | Ok proxy -> (
@@ -154,12 +154,12 @@ let test_explicit_lifecycle remote_host remote_port purpose timeout =
       ( match Stunnel.UnixSocketProxy.diagnose proxy with
       | Ok () ->
           Printf.printf "✓ Proxy status OK (no errors in log)\n"
-      | Error (Stunnel.Certificate_verify reasons) ->
+      | Error (Stunnel_error.Certificate_verify reasons) ->
           Printf.printf "✗ Certificate_verify [%s]\n"
             (String.concat "; " reasons)
-      | Error (Stunnel.Stunnel reason) ->
+      | Error (Stunnel_error.Stunnel reason) ->
           Printf.printf "✗ Stunnel error: %s\n" reason
-      | Error (Stunnel.Unknown reason) ->
+      | Error (Stunnel_error.Unknown reason) ->
           Printf.printf "✗ Unknown error: %s\n" reason
       ) ;
 
