@@ -23,7 +23,7 @@ type log_scan_result =
 
 (** Monadic bind for log_line_status composition *)
 let ( >>= ) check1 check2 line =
-  match check1 line with Continue -> check2 line | other -> other
+  match check1 line with Continue -> check2 line | r -> r
 
 let if_contain affix line matcher =
   if Astring.String.is_infix ~affix line then
@@ -37,7 +37,7 @@ let try_iter f lst =
     | [] ->
         Continue
     | x :: xs -> (
-      match f x with Continue -> aux xs | other -> other
+      match f x with Continue -> aux xs | r -> r
     )
   in
   aux lst
@@ -56,7 +56,10 @@ let check_stunnel_error line =
 let make_check_verify_error () =
   let cert_errors = ref [] in
   fun line ->
-    (* Extract and accumulate CERT errors from the line *)
+    (* Extract and accumulate CERT errors from the line
+     * examples:
+     * CERT: Pre-verification error: certificate has expired
+     * CERT: Subject checks failed *)
     Astring.String.cut ~rev:true ~sep:"CERT: " line
     |> Option.iter (fun (_, cert_error) ->
         cert_errors := cert_error :: !cert_errors
@@ -97,17 +100,17 @@ let stream_from_position (filepath : string) (start_pos : int)
         let rec loop () =
           match input_line ic with
           | exception End_of_file ->
-              let end_pos = (Unix.fstat fd).Unix.st_size in
+              let end_pos = pos_in ic in
               End end_pos
           | line -> (
             match f line with
             | Continue ->
                 loop ()
             | LineError e ->
-                let pos = Unix.lseek fd 0 Unix.SEEK_CUR in
+                let pos = pos_in ic in
                 ScanError (e, pos)
             | LineFound ->
-                let pos = Unix.lseek fd 0 Unix.SEEK_CUR in
+                let pos = pos_in ic in
                 ScanFound pos
           )
         in
@@ -132,17 +135,17 @@ let check_stunnel_logfile_from_position logger logfile start_pos =
   in
   stream_from_position logfile start_pos check_line
 
-let check_stunnel_log_until logfile check_line interval count start_pos =
+let check_stunnel_log_until_found_or_error logfile check_line interval
+    max_retries start_pos =
   let rec check ~max_retries cnt start_pos =
-    Thread.delay interval ;
     match stream_from_position logfile start_pos check_line with
     | End new_pos when cnt <= max_retries ->
+        Thread.delay interval ;
         check ~max_retries (cnt + 1) new_pos
-    | ScanError (e, _pos) ->
-        Error e
-    | ScanFound new_pos ->
-        Ok new_pos
-    | End _ ->
-        Error (Stunnel_error.Stunnel "Timed out waiting for stunnel condition")
+    | End pos ->
+        ScanError
+          (Stunnel_error.Stunnel "Timed out waiting for stunnel condition", pos)
+    | r ->
+        r
   in
-  check ~max_retries:count 0 start_pos
+  check ~max_retries 0 start_pos

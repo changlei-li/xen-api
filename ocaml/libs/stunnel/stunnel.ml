@@ -574,10 +574,19 @@ module UnixSocketProxy = struct
           Error e
     )
 
+  let log_scan_result_to_result = function
+    | Stunnel_log_scanner.ScanFound pos ->
+        Ok pos
+    | Stunnel_log_scanner.ScanError (e, _pos) ->
+        Error e
+    | Stunnel_log_scanner.End _ ->
+        Error (Stunnel_error.Stunnel "Unexpected end of log file")
+
   let wait_for_init_done logfile =
     let open Stunnel_log_scanner in
     let check_line = check_configuration_success >>= check_stunnel_error in
-    check_stunnel_log_until logfile check_line 1.0 3 0
+    check_stunnel_log_until_found_or_error logfile check_line 1.0 3 0
+    |> log_scan_result_to_result
 
   let wait_for_connection_done logfile start_pos =
     let open Stunnel_log_scanner in
@@ -587,22 +596,25 @@ module UnixSocketProxy = struct
       >>= check_verify_error
       >>= check_stunnel_error
     in
-    check_stunnel_log_until logfile check_line 1.0 10 start_pos
+    check_stunnel_log_until_found_or_error logfile check_line 1.0 10 start_pos
+    |> log_scan_result_to_result
 
   (** Start a long-running stunnel proxy listening on a UNIX socket.
       Returns Ok handle that must be explicitly stopped with [stop].
       The stunnel process will continue running until stopped, allowing
       multiple clients to connect to the UNIX socket over time.
       If [unix_socket_path] is not provided, a unique path will be generated.
-      If [socket_mode] is provided (e.g., 0o600), the socket file permissions
+      If [socket_mode] is provided (e.g., 0o666), the socket file permissions
       will be set accordingly after creation.
 
-      This function performs initial certificate verification by making a test
-      connection. If certificate verification fails, returns Error and the proxy
-      is not started. If successful, subsequent connections by stubs will also
-      be verified automatically by stunnel. *)
+      By default, this function skips the initial test connection. If
+      [test_connection] is set to true, it performs initial certificate
+      verification by making a test connection. If certificate verification
+      fails, returns Error and the proxy is not started. If successful,
+      subsequent connections by stubs will also be verified automatically by
+      stunnel. *)
   let start ~verify_cert ~remote_host ~remote_port ?unix_socket_path
-      ?socket_mode ?(test_connection = true) () =
+      ?socket_mode ?(test_connection = false) () =
     let ( let* ) = Result.bind in
     let open Stunnel_error in
     let unix_socket_path =

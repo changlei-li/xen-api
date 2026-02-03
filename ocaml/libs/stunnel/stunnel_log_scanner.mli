@@ -64,17 +64,18 @@ val check_stunnel_logfile_from_position :
     @param start_pos Starting position in bytes
     @return Scan result *)
 
-val check_stunnel_log_until :
+val check_stunnel_log_until_found_or_error :
      string
   -> (string -> log_line_status)
   -> float
   -> int
   -> int
-  -> (int, Stunnel_error.t) result
+  -> log_scan_result
 (** Poll a stunnel log file until a condition is met or timeout.
     @param logfile Path to the log file
     @param check_line Function to check each line
     @param interval Delay between polling attempts (seconds)
-    @param count Maximum number of retry attempts
+    @param max_retries Maximum number of retry attempts
     @param start_pos Starting position in bytes
-    @return Ok with final position if found, Error if timeout or error *)
+    @return ScanFound with position if target found, ScanError if error detected,
+            or ScanError with timeout message if max retries exceeded *)

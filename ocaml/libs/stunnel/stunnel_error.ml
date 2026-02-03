@@ -18,3 +18,11 @@ type t =
   | Certificate_verify of string list
   | Stunnel of string
   | Unknown of string
+
+let to_string = function
+  | Certificate_verify errors ->
+      "Certificate verification errors: " ^ String.concat "; " errors
+  | Stunnel s ->
+      "Stunnel error: " ^ s
+  | Unknown s ->
+      "Unknown error: " ^ s

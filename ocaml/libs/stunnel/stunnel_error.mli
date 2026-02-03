@@ -19,3 +19,6 @@ type t =
       (** Certificate verification failed with these reasons *)
   | Stunnel of string  (** Stunnel process error with description *)
   | Unknown of string  (** Unexpected error with description *)
+
+val to_string : t -> string
+(** Convert error to human-readable string *)

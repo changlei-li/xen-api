@@ -76,14 +76,14 @@ module UnixSocketProxy : sig
     -> (t, Stunnel_error.t) result
   (** Start a long-running stunnel proxy listening on a UNIX socket.
 
-      Returns [Ok handle] if stunnel starts successfully. If [test_connection]
-      is [true] (the default), performs an immediate certificate verification
-      test connection. If certificate verification fails, the proxy is stopped
-      and cleaned up automatically.
+      Returns [Ok handle] if stunnel starts successfully. By default
+      ([test_connection] is [false]), only verifies that stunnel initializes
+      successfully. Certificate validation will happen on the first actual
+      connection.
 
-      Set [~test_connection:false] to skip the initial connection test and
-      only verify that stunnel initializes successfully. Certificate validation
-      will then happen on the first actual connection.
+      Set [~test_connection:true] to perform an immediate certificate
+      verification test connection. If certificate verification fails, the
+      proxy is stopped and cleaned up automatically.
 
       Returns [Error] if stunnel fails to start, initialize, or (when
       [test_connection] is [true]) if certificate verification fails.
@@ -121,7 +121,7 @@ module UnixSocketProxy : sig
       The proxy is guaranteed to be stopped even if the function raises an exception.
       If [unix_socket_path] is not provided, a unique path will be generated.
       If [socket_mode] is provided, stunnel will set the socket file permissions.
-      If [test_connection] is [true] (default), performs initial certificate verification.
+      If [test_connection] is [true], performs initial certificate verification (default is [false]).
       This is the preferred way to use the proxy for most use cases. *)
 end
 
