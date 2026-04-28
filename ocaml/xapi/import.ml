@@ -2452,6 +2452,28 @@ let metadata_handler (req : Request.t) s _ =
               debug "Got XML" ;
               (* Skip trailing two zero blocks *)
               Tar_helpers.skip s (Tar.Header.length * 2) ;
+              (* Drain any remaining body bytes (e.g. tar RECORDSIZE padding)
+                 to prevent EPIPE on the client. See CA-426637. *)
+              Option.iter
+                (fun content_length ->
+                  let file_size = String.length metadata in
+                  let zero_pad =
+                    (Tar.Header.length - (file_size mod Tar.Header.length))
+                    mod Tar.Header.length
+                  in
+                  let consumed =
+                    Tar.Header.length + file_size + zero_pad
+                    + (Tar.Header.length * 2)
+                  in
+                  let remaining = Int64.to_int content_length - consumed in
+                  if remaining > 0 then (
+                    debug "Draining %d remaining body bytes" remaining ;
+                    (try Tar_helpers.skip s remaining
+                     with End_of_file -> ()
+                    )
+                  )
+                )
+                req.Request.content_length ;
               let header = metadata |> Xmlrpc.of_string |> header_of_rpc in
               assert_compatible ~__context header.version ;
               if full_restore then
