@@ -103,6 +103,8 @@ let prototyped_of_field = function
       Some "24.37.0"
   | "VIF", "trunks" ->
       Some "26.16.0-next"
+  | "PIF", "lldp_mode" ->
+      Some "26.16.0-next"
   | "host", "timezone" ->
       Some "26.0.0"
   | "host", "ntp_custom_servers" ->
@@ -162,6 +164,10 @@ let prototyped_of_field = function
   | "VM", "actions__after_softreboot" ->
       Some "23.1.0"
   | "pool", "auto_update_vm_secureboot_certificates" ->
+      Some "26.16.0-next"
+  | "pool", "lldp_enabled" ->
+      Some "26.16.0-next"
+  | "pool", "lldp_multicast_address" ->
       Some "26.16.0-next"
   | "pool", "vm_console_idle_timeout" ->
       Some "26.1.0"
