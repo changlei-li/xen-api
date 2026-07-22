@@ -961,6 +961,29 @@ let set_primary_address_type ~__context ~self ~primary_address_type =
   Monitor_dbcalls_cache.clear_cache_for_pif
     ~pif_name:(Db.PIF.get_device ~__context ~self)
 
+(* LLDP is only configurable on managed physical PIFs that are not bond
+   slaves; bond masters, VLAN, tunnel and SR-IOV PIFs are excluded. *)
+let assert_lldp_configurable ~__context ~self =
+  Xapi_pif_helpers.assert_pif_is_managed ~__context ~self ;
+  let pif_rec = Db.PIF.get_record ~__context ~self in
+  match Xapi_pif_helpers.get_pif_type pif_rec with
+  | Xapi_pif_helpers.Physical _ when pif_rec.API.pIF_bond_slave_of = Ref.null ->
+      ()
+  | _ ->
+      raise
+        (Api_errors.Server_error
+           (Api_errors.pif_is_not_physical, [Ref.string_of self])
+        )
+
+let set_lldp_mode ~__context ~self ~value ~force =
+  assert_lldp_configurable ~__context ~self ;
+  if force || Db.PIF.get_lldp_mode ~__context ~self <> value then (
+    Db.PIF.set_lldp_mode ~__context ~self ~value ;
+    Helpers.call_api_functions ~__context (fun rpc session_id ->
+        Client.Client.PIF.plug ~rpc ~session_id ~self
+    )
+  )
+
 let set_property ~__context ~self ~name ~value =
   let fail () =
     raise

@@ -269,6 +269,10 @@ let prototyped_of_message = function
       Some "26.16.0-next"
   | "VIF", "add_trunks" ->
       Some "26.16.0-next"
+  | "PIF", "set_lldp_mode" ->
+      Some "26.16.0-next"
+  | "pool", "set_lldp_enabled" ->
+      Some "26.16.0-next"
   | "host", "set_servertime" ->
       Some "26.0.0"
   | "host", "get_ntp_synchronized" ->
