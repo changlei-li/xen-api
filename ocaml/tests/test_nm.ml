@@ -96,5 +96,91 @@ module MaybeUpdateMasterPifMac = Generic.MakeStateful (struct
       ]
 end)
 
+(* Verify Nm.determine_lldp resolves the LLDP configuration matrix from
+   pool.lldp_enabled and PIF.lldp_mode into the (enabled, force) pushed to
+   networkd. *)
+let with_lldp_pif f =
+  let __context = Test_common.make_test_database () in
+  let pool = Helpers.get_pool ~__context in
+  let host = Test_common.make_host ~__context () in
+  let network = Test_common.make_network ~__context () in
+  let pif = Test_common.make_pif ~__context ~network ~host () in
+  f ~__context ~pool ~pif
+
+let check_enabled_force ~__context ~pif ~msg expected =
+  let pif_rc = Db.PIF.get_record ~__context ~self:pif in
+  match Nm.determine_lldp ~__context pif_rc with
+  | Some {enabled; force; _} ->
+      Alcotest.(check (pair bool bool)) msg expected (enabled, force)
+  | None ->
+      Alcotest.fail (msg ^ ": expected Some lldp config, got None")
+
+let test_lldp_default_follows_pool_enabled () =
+  with_lldp_pif (fun ~__context ~pool ~pif ->
+      Db.PIF.set_lldp_mode ~__context ~self:pif ~value:`default ;
+      Db.Pool.set_lldp_enabled ~__context ~self:pool ~value:true ;
+      check_enabled_force ~__context ~pif ~msg:"default mode, pool enabled"
+        (true, false)
+  )
+
+let test_lldp_default_follows_pool_disabled () =
+  with_lldp_pif (fun ~__context ~pool ~pif ->
+      Db.PIF.set_lldp_mode ~__context ~self:pif ~value:`default ;
+      Db.Pool.set_lldp_enabled ~__context ~self:pool ~value:false ;
+      check_enabled_force ~__context ~pif ~msg:"default mode, pool disabled"
+        (false, false)
+  )
+
+let test_lldp_enabled_overrides_and_forces () =
+  with_lldp_pif (fun ~__context ~pool ~pif ->
+      (* Even with the pool disabled, an explicit 'enabled' turns LLDP on and
+         sets force to override the networkd driver blocklist. *)
+      Db.Pool.set_lldp_enabled ~__context ~self:pool ~value:false ;
+      Db.PIF.set_lldp_mode ~__context ~self:pif ~value:`enabled ;
+      check_enabled_force ~__context ~pif ~msg:"enabled overrides pool"
+        (true, true)
+  )
+
+let test_lldp_disabled_overrides () =
+  with_lldp_pif (fun ~__context ~pool ~pif ->
+      Db.Pool.set_lldp_enabled ~__context ~self:pool ~value:true ;
+      Db.PIF.set_lldp_mode ~__context ~self:pif ~value:`disabled ;
+      check_enabled_force ~__context ~pif ~msg:"disabled overrides pool"
+        (false, false)
+  )
+
+let test_lldp_multicast_address_mapping () =
+  with_lldp_pif (fun ~__context ~pool ~pif ->
+      Db.Pool.set_lldp_multicast_address ~__context ~self:pool
+        ~value:`nearestcustomerbridge ;
+      let pif_rc = Db.PIF.get_record ~__context ~self:pif in
+      match Nm.determine_lldp ~__context pif_rc with
+      | Some {address= [Nearest_customer_bridge]; _} ->
+          ()
+      | _ ->
+          Alcotest.fail "expected [Nearest_customer_bridge]"
+  )
+
+let determine_lldp_tests =
+  [
+    ( "default_mode_follows_pool_enabled"
+    , `Quick
+    , test_lldp_default_follows_pool_enabled
+    )
+  ; ( "default_mode_follows_pool_disabled"
+    , `Quick
+    , test_lldp_default_follows_pool_disabled
+    )
+  ; ( "enabled_mode_overrides_and_forces"
+    , `Quick
+    , test_lldp_enabled_overrides_and_forces
+    )
+  ; ("disabled_mode_overrides", `Quick, test_lldp_disabled_overrides)
+  ; ("multicast_address_mapping", `Quick, test_lldp_multicast_address_mapping)
+  ]
+
 let tests =
-  [("test_nm_maybe_update_master_pif_mac", MaybeUpdateMasterPifMac.tests)]
+  [
+    ("test_nm_maybe_update_master_pif_mac", MaybeUpdateMasterPifMac.tests)
+  ; ("test_nm_determine_lldp", determine_lldp_tests)
+  ]
