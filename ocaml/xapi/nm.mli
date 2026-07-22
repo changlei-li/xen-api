@@ -29,6 +29,13 @@ val is_dom0_interface : API.pIF_t -> bool
 (** [is_dom0_interface pif_r] returns true if pif_r is a network interface
     which has a dom0 endpoint *)
 
+val determine_lldp :
+  __context:Context.t -> API.pIF_t -> Network_interface.lldp option
+(** [determine_lldp ~__context pif_rc] builds the LLDP configuration to push to
+    networkd for the NIC of the managed physical PIF [pif_rc], resolving the
+    LLDP configuration matrix from pool.lldp_enabled, PIF.lldp_mode and
+    pool.lldp_multicast_address *)
+
 (* Internals *)
 val maybe_update_master_pif_mac :
   __context:Context.t -> API.bond_t -> API.pIF_t -> API.ref_PIF -> API.pIF_t
