@@ -161,6 +161,31 @@ let test_lldp_multicast_address_mapping () =
           Alcotest.fail "expected [Nearest_customer_bridge]"
   )
 
+(* A bond member is a managed physical PIF, so it gets LLDP config following
+   its own PIF.lldp_mode against the pool setting. *)
+let test_lldp_bond_member () =
+  let __context = Test_common.make_test_database () in
+  let pool = Helpers.get_pool ~__context in
+  let host = Test_common.make_host ~__context () in
+  let network = Test_common.make_network ~__context () in
+  let bond_master =
+    Test_common.make_pif ~__context ~network ~host ~mAC:"aa:bb:cc:dd:ee:01" ()
+  in
+  let slave =
+    Test_common.make_pif ~__context ~network ~host ~bond_slave_of:bond_master
+      ~mAC:"aa:bb:cc:dd:ee:02" ()
+  in
+  let _bond =
+    Test_common.make_bond ~__context ~master:bond_master ~primary_slave:slave ()
+  in
+  Db.Pool.set_lldp_enabled ~__context ~self:pool ~value:true ;
+  Db.PIF.set_lldp_mode ~__context ~self:slave ~value:`default ;
+  check_enabled_force ~__context ~pif:slave ~msg:"bond member, default + pool on"
+    (true, false) ;
+  Db.PIF.set_lldp_mode ~__context ~self:slave ~value:`disabled ;
+  check_enabled_force ~__context ~pif:slave ~msg:"bond member, explicit disabled"
+    (false, false)
+
 let determine_lldp_tests =
   [
     ( "default_mode_follows_pool_enabled"
@@ -177,6 +202,7 @@ let determine_lldp_tests =
     )
   ; ("disabled_mode_overrides", `Quick, test_lldp_disabled_overrides)
   ; ("multicast_address_mapping", `Quick, test_lldp_multicast_address_mapping)
+  ; ("bond_member", `Quick, test_lldp_bond_member)
   ]
 
 let tests =
