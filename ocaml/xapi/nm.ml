@@ -180,6 +180,7 @@ let create_bond ~__context bond mtu persistent =
           ; ethtool_settings
           ; ethtool_offload
           ; persistent_i= persistent
+          ; lldp= determine_lldp ~__context (Db.PIF.get_record ~__context ~self:pif)
           }
         in
         (device, bridge, config)
