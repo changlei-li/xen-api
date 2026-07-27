@@ -176,6 +176,7 @@ let rec monitor dbg () =
                   ; nb_links
                   ; links_up
                   ; interfaces
+                  ; lldp_neighbor= None
                   }
                 else
                   let carrier = List.exists (fun info -> info.up) bond_slaves in
@@ -219,6 +220,7 @@ let rec monitor dbg () =
                   ; nb_links
                   ; links_up
                   ; interfaces
+                  ; lldp_neighbor= None
                   }
               in
               check_for_changes ~dev ~stat ;

@@ -34,6 +34,13 @@ let checksum_bytes = 32
 
 let length_bytes = 8
 
+type lldp_rx = {
+    system_name: string option
+  ; port_id: string option
+  ; port_description: string option
+}
+[@@deriving rpcty]
+
 type iface_stats = {
     carrier: bool
   ; speed: int
@@ -44,6 +51,7 @@ type iface_stats = {
   ; nb_links: int
   ; links_up: int
   ; interfaces: iface list
+  ; lldp_neighbor: lldp_rx option
 }
 [@@deriving rpcty]
 
@@ -58,6 +66,7 @@ let default_stats =
   ; nb_links= 0
   ; links_up= 0
   ; interfaces= []
+  ; lldp_neighbor= None
   }
 
 type stats_t = (iface * iface_stats) list [@@deriving rpcty]
