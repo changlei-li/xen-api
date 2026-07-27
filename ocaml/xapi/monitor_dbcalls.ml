@@ -22,6 +22,17 @@ module D = Debug.Make (struct let name = "monitor_dbcalls" end)
 
 open D
 
+(* Encode a received LLDP neighbour as a (key, value) map for
+   PIF_metrics.lldp_neighbor, omitting fields that were not advertised. *)
+let lldp_map_of_rx (rx : Network_stats.lldp_rx) : (string * string) list =
+  List.filter_map
+    (fun (k, v) -> Option.map (fun x -> (k, x)) v)
+    [
+      ("system-name", rx.Network_stats.system_name)
+    ; ("port-id", rx.Network_stats.port_id)
+    ; ("port-description", rx.Network_stats.port_description)
+    ]
+
 let get_pif_and_bond_changes () =
   (* Read fresh PIF information from networkd. *)
   let open Network_stats in
@@ -42,7 +53,14 @@ let get_pif_and_bond_changes () =
           ; pif_device_id= stat.device_id
           }
         in
-        Hashtbl.add pifs_tmp pif.pif_name pif
+        Hashtbl.add pifs_tmp pif.pif_name pif ;
+        Hashtbl.replace lldp_neighbor_tmp dev
+          (match stat.lldp_neighbor with
+          | Some rx ->
+              lldp_map_of_rx rx
+          | None ->
+              []
+          )
       )
     )
     stats ;
@@ -52,8 +70,12 @@ let get_pif_and_bond_changes () =
   let bond_changes =
     get_updates_map ~before:bonds_links_up_cached ~after:bonds_links_up_tmp
   in
+  (* Check if any received LLDP neighbour has changed since our last reading. *)
+  let lldp_changes =
+    get_updates_map ~before:lldp_neighbor_cached ~after:lldp_neighbor_tmp
+  in
   (* Return lists of changes. *)
-  (pif_changes, bond_changes)
+  (pif_changes, bond_changes, lldp_changes)
 
 let set_pif_changes ?except () =
   with_lock pifs_cached_m (fun _ ->
@@ -66,15 +88,22 @@ let set_bond_changes ?except () =
         ~target:bonds_links_up_cached ()
   )
 
+let set_lldp_changes ?except () =
+  with_lock lldp_neighbor_cached_m (fun _ ->
+      transfer_map ?except ~source:lldp_neighbor_tmp
+        ~target:lldp_neighbor_cached ()
+  )
+
 (* This function updates the database for all the slowly changing properties
  * of host memory, VM memory, PIFs, and bonds.
  *)
 let pifs_update_fn () =
-  let pif_changes, bond_changes = get_pif_and_bond_changes () in
+  let pif_changes, bond_changes, lldp_changes = get_pif_and_bond_changes () in
   Server_helpers.exec_with_new_task "updating PIFs" (fun __context ->
       let host = Helpers.get_localhost ~__context in
       let issues = ref [] in
       let keeps = ref [] in
+      let keeps_lldp = ref [] in
       List.iter
         (fun (bond, links_up) ->
           try
@@ -112,6 +141,31 @@ let pifs_update_fn () =
           set_pif_changes ()
         with e -> issues := e :: !issues
       ) ;
+      List.iter
+        (fun (dev, neighbor) ->
+          try
+            match
+              Db.PIF.get_records_where ~__context
+                ~expr:
+                  (And
+                     ( Eq (Field "host", Literal (Ref.string_of host))
+                     , Eq (Field "device", Literal dev)
+                     )
+                  )
+            with
+            | (_, pif_rec) :: _ ->
+                let metrics = pif_rec.API.pIF_metrics in
+                if Db.is_valid_ref __context metrics then
+                  Db.PIF_metrics.set_lldp_neighbor ~__context ~self:metrics
+                    ~value:neighbor
+            | [] ->
+                ()
+          with e ->
+            issues := e :: !issues ;
+            keeps_lldp := dev :: !keeps_lldp
+        )
+        lldp_changes ;
+      set_lldp_changes ~except:!keeps_lldp () ;
       List.iter
         (function
           | Db_exn.Read_missing_uuid _ ->

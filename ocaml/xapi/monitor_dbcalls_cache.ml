@@ -30,6 +30,16 @@ let bonds_links_up_cached : (string, int) Hashtbl.t = Hashtbl.create 10
 
 let bonds_links_up_tmp : (string, int) Hashtbl.t = Hashtbl.create 10
 
+(* A cache mapping PIF (device) names to their received LLDP neighbour, encoded
+   as a (key, value) map. *)
+let lldp_neighbor_cached_m : Mutex.t = Mutex.create ()
+
+let lldp_neighbor_cached : (string, (string * string) list) Hashtbl.t =
+  Hashtbl.create 10
+
+let lldp_neighbor_tmp : (string, (string * string) list) Hashtbl.t =
+  Hashtbl.create 10
+
 (* A cache mapping vm_uuids to actual memory. *)
 let vm_memory_cached_m : Mutex.t = Mutex.create ()
 
@@ -60,6 +70,10 @@ let clear_cache_for_pif ~pif_name =
   with_lock pifs_cached_m (fun _ ->
       Hashtbl.remove pifs_cached pif_name ;
       Hashtbl.remove pifs_tmp pif_name
+  ) ;
+  with_lock lldp_neighbor_cached_m (fun _ ->
+      Hashtbl.remove lldp_neighbor_cached pif_name ;
+      Hashtbl.remove lldp_neighbor_tmp pif_name
   )
 
 (** [clear_cache_for_vm] removes any current cache for VM with [vm_uuid],
@@ -86,6 +100,8 @@ let clear_cache () =
   safe_clear ~cache:pifs_cached ~tmp:pifs_tmp ~lock:pifs_cached_m ;
   safe_clear ~cache:bonds_links_up_cached ~tmp:bonds_links_up_tmp
     ~lock:bonds_links_up_cached_m ;
+  safe_clear ~cache:lldp_neighbor_cached ~tmp:lldp_neighbor_tmp
+    ~lock:lldp_neighbor_cached_m ;
   safe_clear ~cache:vm_memory_cached ~tmp:vm_memory_tmp ~lock:vm_memory_cached_m ;
   with_lock host_memory_m (fun _ ->
       host_memory_free_cached := Int64.zero ;
