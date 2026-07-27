@@ -132,10 +132,36 @@ let get_link_stats dbg () =
   in
   Cache.free cache ; Socket.close s ; Socket.free s ; links
 
+(* Cache of the latest LLDP neighbour seen per interface. lldpd is queried on a
+   slower cadence than the rest of the stats (LLDPDUs arrive ~every 30s), to
+   avoid unnecessary lldpcli calls. *)
+let lldp_neighbors : (string, Network_monitor.lldp_rx) Hashtbl.t =
+  Hashtbl.create 16
+
+let lldp_last_query = ref neg_infinity
+
+let lldp_query_interval = 30.0
+
+let refresh_lldp_neighbors () =
+  let now = Unix.gettimeofday () in
+  if now -. !lldp_last_query >= lldp_query_interval then (
+    lldp_last_query := now ;
+    Hashtbl.reset lldp_neighbors ;
+    List.iter
+      (fun (dev, rx) ->
+        if Hashtbl.mem lldp_neighbors dev then
+          debug "Multiple LLDP neighbours on %s; keeping the first" dev
+        else
+          Hashtbl.replace lldp_neighbors dev rx
+      )
+      (Lldp.get_neighbors ())
+  )
+
 let rec monitor dbg () =
   let open Network_interface in
   let open Network_monitor in
   ( try
+      refresh_lldp_neighbors () ;
       let get_stats bonds devs =
         List.map
           (fun dev ->
@@ -176,7 +202,7 @@ let rec monitor dbg () =
                   ; nb_links
                   ; links_up
                   ; interfaces
-                  ; lldp_neighbor= None
+                  ; lldp_neighbor= Hashtbl.find_opt lldp_neighbors dev
                   }
                 else
                   let carrier = List.exists (fun info -> info.up) bond_slaves in

@@ -50,6 +50,52 @@ module Lldp_types = struct
     | Multicast_address of I.lldp_multicast_address list
 end
 
+(* Parse the JSON emitted by [lldpcli -f json show neighbors] into the
+   per-interface neighbour information. Kept pure for testing. Missing fields
+   become None; on any parse error the result is empty. *)
+let parse_neighbors (output : string) : (string * Network_stats.lldp_rx) list =
+  let member k = function
+    | `Assoc l -> (
+      match List.assoc_opt k l with Some v -> v | None -> `Null
+    )
+    | _ ->
+        `Null
+  in
+  let to_str = function `String s -> Some s | _ -> None in
+  (* [lldp.interface] is normally a list of single-key objects keyed by the
+     interface name; tolerate it also being an object keyed by interface name. *)
+  let iface_entries = function
+    | `List l ->
+        List.filter_map (function `Assoc [(k, v)] -> Some (k, v) | _ -> None) l
+    | `Assoc l ->
+        l
+    | _ ->
+        []
+  in
+  match Yojson.Safe.from_string output with
+  | exception e ->
+      debug "%s: could not parse LLDP neighbours JSON: %s" __FUNCTION__
+        (Printexc.to_string e) ;
+      []
+  | json ->
+      json
+      |> member "lldp"
+      |> member "interface"
+      |> iface_entries
+      |> List.map (fun (dev, body) ->
+             let system_name =
+               match member "chassis" body with
+               | `Assoc ((name, _) :: _) ->
+                   Some name
+               | _ ->
+                   None
+             in
+             let port = member "port" body in
+             let port_id = port |> member "id" |> member "value" |> to_str in
+             let port_description = port |> member "descr" |> to_str in
+             (dev, Network_stats.{system_name; port_id; port_description})
+         )
+
 module type AGENT = sig
   type error = Lldp_types.error
 
@@ -70,6 +116,9 @@ module type AGENT = sig
 
   val disable : string -> (unit, error) result
   (** Stop LLDP (rx-and-tx) on [dev]. *)
+
+  val get_neighbors : unit -> (string * Network_stats.lldp_rx) list
+  (** Query the agent for the LLDP neighbour received on each interface. *)
 end
 
 let management_ip_address =
@@ -103,6 +152,8 @@ module Lldpd : AGENT = struct
   type error = Lldp_types.error
 
   let cli = "/usr/sbin/lldpcli"
+
+  let show_neighbors_args = ["-f"; "json"; "show"; "neighbors"]
 
   let systemctl = "/usr/bin/systemctl"
 
@@ -170,6 +221,17 @@ module Lldpd : AGENT = struct
 
   let disable dev =
     call_cli ["configure"; "ports"; dev; "lldp"; "status"; "disabled"]
+
+  let get_neighbors () =
+    match
+      try Ok (Network_utils.call_script cli show_neighbors_args)
+      with e -> Error (Printexc.to_string e)
+    with
+    | Ok output ->
+        parse_neighbors output
+    | Error msg ->
+        debug "%s: could not query LLDP neighbours: %s" __FUNCTION__ msg ;
+        []
 
   let string_of_multicast_address = function
     | I.Nearest_bridge ->
@@ -427,6 +489,8 @@ module Lldp_agent = Make (Lldpd)
 let set_conf dev (config : I.lldp option) = Lldp_agent.set_conf dev config
 
 let stop = Lldp_agent.stop
+
+let get_neighbors = Lldpd.get_neighbors
 
 let set_tlv_management_address () =
   management_ip_address ~force:true () |> Lldp_agent.set_tlv_management_address

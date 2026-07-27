@@ -19,6 +19,14 @@ val set_conf : string -> Network_interface.lldp option -> unit
 val stop : unit -> unit
 (** [stop ()] stops the host's LLDP agent. *)
 
+val get_neighbors : unit -> (string * Network_stats.lldp_rx) list
+(** [get_neighbors ()] queries the LLDP agent and returns, per interface, the
+    received neighbour information (system name, port id, port description). *)
+
+val parse_neighbors : string -> (string * Network_stats.lldp_rx) list
+(** [parse_neighbors output] parses the JSON produced by
+    [lldpcli -f json show neighbors]. Exposed for testing. *)
+
 val set_tlv_management_address : unit -> unit
 (** [set_tlv_management_address ()] retrieves the management IP address(es) of
     the host and configure them in the LLDP management address TLV for advertising. *)
