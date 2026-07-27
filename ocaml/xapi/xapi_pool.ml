@@ -3862,11 +3862,13 @@ let set_lldp_enabled ~__context ~self ~value ~force =
     Db.Pool.set_lldp_enabled ~__context ~self ~value ;
     (* LLDP runs on physical NICs. Standalone physical PIFs are plugged
        directly; bonded NICs are (re)configured by plugging the bond master.
-       Both apply the per-PIF PIF.lldp_mode against the new pool setting. *)
+       Only currently-attached PIFs are re-plugged; an unplugged PIF will pick
+       up the new pool setting the next time it is brought up. *)
     let pifs =
       Db.PIF.get_all_records ~__context
       |> List.filter (fun (_, r) ->
              r.API.pIF_managed
+             && r.API.pIF_currently_attached
              && (r.API.pIF_physical && r.API.pIF_bond_slave_of = Ref.null
                 || r.API.pIF_bond_master_of <> []
                 )
