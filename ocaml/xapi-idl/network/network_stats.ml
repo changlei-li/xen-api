@@ -34,8 +34,20 @@ let checksum_bytes = 32
 
 let length_bytes = 8
 
+type lldp_state = Enabled | Disabled | Blocked
+[@@default Disabled] [@@deriving rpcty]
+
+let string_of_lldp_state = function
+  | Enabled ->
+      "enabled"
+  | Disabled ->
+      "disabled"
+  | Blocked ->
+      "blocked"
+
 type lldp_rx = {
-    system_name: string option
+    state: lldp_state
+  ; system_name: string option
   ; port_id: string option
   ; port_description: string option
 }

@@ -23,15 +23,17 @@ module D = Debug.Make (struct let name = "monitor_dbcalls" end)
 open D
 
 (* Encode a received LLDP neighbour as a (key, value) map for
-   PIF_metrics.lldp_neighbor, omitting fields that were not advertised. *)
+   PIF_metrics.lldp_neighbor. The NIC's LLDP [state] is always reported;
+   neighbour fields are included only when advertised. *)
 let lldp_map_of_rx (rx : Network_stats.lldp_rx) : (string * string) list =
-  List.filter_map
-    (fun (k, v) -> Option.map (fun x -> (k, x)) v)
-    [
-      ("system-name", rx.Network_stats.system_name)
-    ; ("port-id", rx.Network_stats.port_id)
-    ; ("port-description", rx.Network_stats.port_description)
-    ]
+  ("state", Network_stats.string_of_lldp_state rx.Network_stats.state)
+  :: List.filter_map
+       (fun (k, v) -> Option.map (fun x -> (k, x)) v)
+       [
+         ("system-name", rx.Network_stats.system_name)
+       ; ("port-id", rx.Network_stats.port_id)
+       ; ("port-description", rx.Network_stats.port_description)
+       ]
 
 let get_pif_and_bond_changes () =
   (* Read fresh PIF information from networkd. *)

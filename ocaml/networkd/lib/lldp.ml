@@ -52,7 +52,8 @@ end
 
 (* Parse the JSON emitted by [lldpcli -f json show neighbors] into the
    per-interface neighbour information. Kept pure for testing. Missing fields
-   become None; on any parse error the result is empty. *)
+   become None; on any parse error the result is empty. The [state] field is a
+   placeholder ([Disabled]) here; the monitor fills in the effective state. *)
 let parse_neighbors (output : string) : (string * Network_stats.lldp_rx) list =
   let member k = function
     | `Assoc l -> (
@@ -93,7 +94,10 @@ let parse_neighbors (output : string) : (string * Network_stats.lldp_rx) list =
              let port = member "port" body in
              let port_id = port |> member "id" |> member "value" |> to_str in
              let port_description = port |> member "descr" |> to_str in
-             (dev, Network_stats.{system_name; port_id; port_description})
+             ( dev
+             , Network_stats.
+                 {state= Disabled; system_name; port_id; port_description}
+             )
          )
 
 module type AGENT = sig
@@ -426,6 +430,22 @@ module Blocklist = struct
     | Some driver ->
         List.mem driver (blocked ())
 end
+
+(* The effective LLDP state of a physical NIC, mirroring the decision matrix in
+   [set_conf]: [Blocked] by the driver blocklist, otherwise enabled or disabled
+   by the pool/PIF configuration pushed from xapi. *)
+let state_of dev (config : I.lldp option) : Network_stats.lldp_state =
+  match config with
+  | None ->
+      Network_stats.Disabled
+  | Some lldp ->
+      let blocked = (not lldp.force) && Blocklist.mem dev in
+      if blocked then
+        Network_stats.Blocked
+      else if lldp.enabled then
+        Network_stats.Enabled
+      else
+        Network_stats.Disabled
 
 module Make (Agent : AGENT) = struct
   let ( let* ) = Result.bind

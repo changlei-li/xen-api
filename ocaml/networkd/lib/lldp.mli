@@ -27,6 +27,11 @@ val parse_neighbors : string -> (string * Network_stats.lldp_rx) list
 (** [parse_neighbors output] parses the JSON produced by
     [lldpcli -f json show neighbors]. Exposed for testing. *)
 
+val state_of : string -> Network_interface.lldp option -> Network_stats.lldp_state
+(** [state_of dev config] is the effective LLDP state of physical NIC [dev]
+    given its LLDP [config]: [Blocked] when its driver is in the blocklist,
+    otherwise [Enabled]/[Disabled] per the pool/PIF configuration. *)
+
 val set_tlv_management_address : unit -> unit
 (** [set_tlv_management_address ()] retrieves the management IP address(es) of
     the host and configure them in the LLDP management address TLV for advertising. *)

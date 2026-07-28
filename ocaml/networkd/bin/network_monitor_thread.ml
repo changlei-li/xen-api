@@ -157,6 +157,35 @@ let refresh_lldp_neighbors () =
       (Lldp.get_neighbors ())
   )
 
+(* The effective LLDP state of physical [dev], derived from the LLDP config that
+   xapi pushed into networkd (reflecting pool.lldp_enabled and PIF.lldp_mode)
+   together with the driver blocklist. *)
+let lldp_state_of dev =
+  let config =
+    List.assoc_opt dev (!Network_server.config).interface_config
+    |> Option.map (fun (c : Network_interface.interface_config_t) -> c.lldp)
+    |> Option.join
+  in
+  Lldp.state_of dev config
+
+(* The LLDP information reported for physical [dev]: its effective state is
+   always populated; neighbour fields come from the last query, if any. *)
+let lldp_rx_of dev =
+  let base =
+    match Hashtbl.find_opt lldp_neighbors dev with
+    | Some rx ->
+        rx
+    | None ->
+        Network_monitor.
+          {
+            state= Disabled
+          ; system_name= None
+          ; port_id= None
+          ; port_description= None
+          }
+  in
+  {base with Network_monitor.state= lldp_state_of dev}
+
 let rec monitor dbg () =
   let open Network_interface in
   let open Network_monitor in
@@ -202,7 +231,7 @@ let rec monitor dbg () =
                   ; nb_links
                   ; links_up
                   ; interfaces
-                  ; lldp_neighbor= Hashtbl.find_opt lldp_neighbors dev
+                  ; lldp_neighbor= Some (lldp_rx_of dev)
                   }
                 else
                   let carrier = List.exists (fun info -> info.up) bond_slaves in
