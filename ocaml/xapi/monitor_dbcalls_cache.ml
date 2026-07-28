@@ -30,14 +30,14 @@ let bonds_links_up_cached : (string, int) Hashtbl.t = Hashtbl.create 10
 
 let bonds_links_up_tmp : (string, int) Hashtbl.t = Hashtbl.create 10
 
-(* A cache mapping PIF (device) names to their received LLDP neighbour, encoded
-   as a (key, value) map. *)
+(* A cache mapping PIF (device) names to their received LLDP neighbours, each
+   encoded as a (key, value) map. *)
 let lldp_neighbor_cached_m : Mutex.t = Mutex.create ()
 
-let lldp_neighbor_cached : (string, (string * string) list) Hashtbl.t =
+let lldp_neighbor_cached : (string, (string * string) list list) Hashtbl.t =
   Hashtbl.create 10
 
-let lldp_neighbor_tmp : (string, (string * string) list) Hashtbl.t =
+let lldp_neighbor_tmp : (string, (string * string) list list) Hashtbl.t =
   Hashtbl.create 10
 
 (* A cache mapping vm_uuids to actual memory. *)
