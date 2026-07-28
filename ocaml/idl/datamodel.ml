@@ -3013,13 +3013,13 @@ module PIF_metrics = struct
             ~ty:(Map (String, String))
             "other_config" "additional configuration"
         ; field ~qualifier:DynamicRO ~lifecycle:[]
-            ~default_value:(Some (VSet []))
-            ~ty:(Set (Map (String, String)))
-            "lldp_neighbors"
-            "The LLDP TLVs received from the neighbours on the physical NIC of \
-             the corresponding PIF. Each entry is one neighbour, as a map of \
-             (for example) system-name, port-id and port-description. Empty \
-             when no neighbour is seen or LLDP is disabled."
+            ~default_value:(Some (VMap []))
+            ~ty:(Map (String, String))
+            "lldp_neighbor"
+            "The LLDP TLVs received from the neighbour on the physical NIC of \
+             the corresponding PIF (for example system-name, port-id and \
+             port-description); empty when no neighbour is seen or LLDP is \
+             disabled."
         ]
       ()
 end

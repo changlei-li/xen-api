@@ -132,10 +132,10 @@ let get_link_stats dbg () =
   in
   Cache.free cache ; Socket.close s ; Socket.free s ; links
 
-(* Cache of the LLDP neighbours seen per interface. lldpd is queried on a
+(* Cache of the latest LLDP neighbour seen per interface. lldpd is queried on a
    slower cadence than the rest of the stats (LLDPDUs arrive ~every 30s), to
    avoid unnecessary lldpcli calls. *)
-let lldp_neighbors : (string, Network_monitor.lldp_rx list) Hashtbl.t =
+let lldp_neighbors : (string, Network_monitor.lldp_rx) Hashtbl.t =
   Hashtbl.create 16
 
 let lldp_last_query = ref neg_infinity
@@ -149,14 +149,10 @@ let refresh_lldp_neighbors () =
     Hashtbl.reset lldp_neighbors ;
     List.iter
       (fun (dev, rx) ->
-        let existing =
-          match Hashtbl.find_opt lldp_neighbors dev with
-          | Some l ->
-              l
-          | None ->
-              []
-        in
-        Hashtbl.replace lldp_neighbors dev (existing @ [rx])
+        if Hashtbl.mem lldp_neighbors dev then
+          debug "Multiple LLDP neighbours on %s; keeping the first" dev
+        else
+          Hashtbl.replace lldp_neighbors dev rx
       )
       (Lldp.get_neighbors ())
   )
@@ -206,13 +202,7 @@ let rec monitor dbg () =
                   ; nb_links
                   ; links_up
                   ; interfaces
-                  ; lldp_neighbors=
-                      (match Hashtbl.find_opt lldp_neighbors dev with
-                      | Some l ->
-                          l
-                      | None ->
-                          []
-                      )
+                  ; lldp_neighbor= Hashtbl.find_opt lldp_neighbors dev
                   }
                 else
                   let carrier = List.exists (fun info -> info.up) bond_slaves in
@@ -256,7 +246,7 @@ let rec monitor dbg () =
                   ; nb_links
                   ; links_up
                   ; interfaces
-                  ; lldp_neighbors= []
+                  ; lldp_neighbor= None
                   }
               in
               check_for_changes ~dev ~stat ;

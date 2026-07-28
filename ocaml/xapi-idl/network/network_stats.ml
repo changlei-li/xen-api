@@ -51,7 +51,7 @@ type iface_stats = {
   ; nb_links: int
   ; links_up: int
   ; interfaces: iface list
-  ; lldp_neighbors: lldp_rx list
+  ; lldp_neighbor: lldp_rx option
 }
 [@@deriving rpcty]
 
@@ -66,7 +66,7 @@ let default_stats =
   ; nb_links= 0
   ; links_up= 0
   ; interfaces= []
-  ; lldp_neighbors= []
+  ; lldp_neighbor= None
   }
 
 type stats_t = (iface * iface_stats) list [@@deriving rpcty]

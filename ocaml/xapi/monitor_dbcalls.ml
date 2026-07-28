@@ -55,7 +55,12 @@ let get_pif_and_bond_changes () =
         in
         Hashtbl.add pifs_tmp pif.pif_name pif ;
         Hashtbl.replace lldp_neighbor_tmp dev
-          (List.map lldp_map_of_rx stat.lldp_neighbors)
+          (match stat.lldp_neighbor with
+          | Some rx ->
+              lldp_map_of_rx rx
+          | None ->
+              []
+          )
       )
     )
     stats ;
@@ -151,7 +156,7 @@ let pifs_update_fn () =
             | (_, pif_rec) :: _ ->
                 let metrics = pif_rec.API.pIF_metrics in
                 if Db.is_valid_ref __context metrics then
-                  Db.PIF_metrics.set_lldp_neighbors ~__context ~self:metrics
+                  Db.PIF_metrics.set_lldp_neighbor ~__context ~self:metrics
                     ~value:neighbor
             | [] ->
                 ()
