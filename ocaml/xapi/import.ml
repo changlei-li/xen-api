@@ -2251,7 +2251,7 @@ let with_open_archive fd ?length f =
     retry_with_compression := false ;
     let xml = read_xml hdr fd in
     Tar_helpers.skip fd (Tar.Header.compute_zero_padding_length hdr) ;
-    f xml fd
+    f ~compressed:false xml fd
   with e ->
     if not !retry_with_compression then raise e ;
     let decompress =
@@ -2297,7 +2297,7 @@ let with_open_archive fd ?length f =
           assert_filename_is hdr ;
           let xml = read_xml hdr pipe_out in
           Tar_helpers.skip pipe_out (Tar.Header.compute_zero_padding_length hdr) ;
-          f xml pipe_out
+          f ~compressed:true xml pipe_out
         )
         (fun () ->
           ignore_exn (fun () -> Unix.close pipe_out) ;
@@ -2448,32 +2448,33 @@ let metadata_handler (req : Request.t) s _ =
           in
           Http_svr.headers s headers ;
           with_open_archive s ?length:req.Request.content_length
-            (fun metadata s ->
+            (fun ~compressed metadata s ->
               debug "Got XML" ;
               (* Skip trailing two zero blocks *)
               Tar_helpers.skip s (Tar.Header.length * 2) ;
               (* Drain any remaining body bytes (e.g. tar RECORDSIZE padding)
                  to prevent EPIPE on the client. See CA-426637. *)
-              Option.iter
-                (fun content_length ->
+              ( match (compressed, req.Request.content_length) with
+              | false, Some content_length ->
                   let file_size = String.length metadata in
                   let zero_pad =
                     (Tar.Header.length - (file_size mod Tar.Header.length))
                     mod Tar.Header.length
                   in
                   let consumed =
-                    Tar.Header.length + file_size + zero_pad
+                    Tar.Header.length
+                    + file_size
+                    + zero_pad
                     + (Tar.Header.length * 2)
                   in
                   let remaining = Int64.to_int content_length - consumed in
                   if remaining > 0 then (
                     debug "Draining %d remaining body bytes" remaining ;
-                    (try Tar_helpers.skip s remaining
-                     with End_of_file -> ()
-                    )
+                    try Tar_helpers.skip s remaining with End_of_file -> ()
                   )
-                )
-                req.Request.content_length ;
+              | _ ->
+                  ()
+              ) ;
               let header = metadata |> Xmlrpc.of_string |> header_of_rpc in
               assert_compatible ~__context header.version ;
               if full_restore then
@@ -2523,8 +2524,9 @@ let metadata_handler (req : Request.t) s _ =
 
 let stream_import __context rpc session_id s content_length refresh_session
     config =
-  with_open_archive s ?length:content_length (fun metadata s ->
+  with_open_archive s ?length:content_length (fun ~compressed metadata s ->
       debug "Got XML" ;
+      ignore compressed ;
       let vmrefs =
         let header = metadata |> Xmlrpc.of_string |> header_of_rpc in
         assert_compatible ~__context header.version ;
