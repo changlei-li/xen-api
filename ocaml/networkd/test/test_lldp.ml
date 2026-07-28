@@ -15,20 +15,21 @@
 (* Tests for Lldp.parse_neighbors: parsing the JSON emitted by
    [lldpcli -f json show neighbors]. *)
 
-let lldp_rx_testable =
+let neighbor_testable =
   let open Network_stats in
   Alcotest.testable
     (fun ppf rx ->
-      Fmt.pf ppf "{system_name=%a; port_id=%a; port_description=%a}"
+      Fmt.pf ppf "{state=%s; system_name=%a; port_id=%a; port_description=%a}"
+        (string_of_lldp_state rx.state)
         Fmt.(option string) rx.system_name Fmt.(option string) rx.port_id
         Fmt.(option string) rx.port_description
     )
     ( = )
 
-let result_testable = Alcotest.(list (pair string lldp_rx_testable))
+let result_testable = Alcotest.(list (pair string neighbor_testable))
 
 let rx ?system_name ?port_id ?port_description () =
-  Network_stats.{system_name; port_id; port_description}
+  Network_stats.{state= Disabled; system_name; port_id; port_description}
 
 (* One interface with one neighbour (a Cisco Nexus switch). *)
 let single_json =
@@ -97,6 +98,42 @@ let test_malformed () =
   Alcotest.check result_testable "malformed JSON yields empty" []
     (Lldp.parse_neighbors "not json {")
 
+let state_testable =
+  Alcotest.testable
+    (Fmt.of_to_string Network_stats.string_of_lldp_state)
+    ( = )
+
+let lldp ?(force = false) ~enabled () =
+  Network_interface.
+    {
+      force
+    ; chassis_id= ""
+    ; system_name= ""
+    ; system_description= ""
+    ; enabled
+    ; address= [Nearest_bridge]
+    }
+
+(* [state_of] on a device with no real driver never reports [Blocked] (the
+   blocklist matches on driver name), so it exercises the config-driven arms. *)
+let test_state_no_config () =
+  Alcotest.check state_testable "no config is disabled" Network_stats.Disabled
+    (Lldp.state_of "lldptest0" None)
+
+let test_state_disabled () =
+  Alcotest.check state_testable "enabled=false is disabled"
+    Network_stats.Disabled
+    (Lldp.state_of "lldptest0" (Some (lldp ~enabled:false ())))
+
+let test_state_enabled () =
+  Alcotest.check state_testable "enabled=true is enabled" Network_stats.Enabled
+    (Lldp.state_of "lldptest0" (Some (lldp ~enabled:true ())))
+
+let test_state_forced () =
+  Alcotest.check state_testable "force bypasses the blocklist"
+    Network_stats.Enabled
+    (Lldp.state_of "lldptest0" (Some (lldp ~force:true ~enabled:true ())))
+
 let tests =
   [
     ( "lldp_parse_neighbors"
@@ -105,6 +142,14 @@ let tests =
       ; ("multi", `Quick, test_multi)
       ; ("empty", `Quick, test_empty)
       ; ("malformed", `Quick, test_malformed)
+      ]
+    )
+  ; ( "lldp_state_of"
+    , [
+        ("no_config", `Quick, test_state_no_config)
+      ; ("disabled", `Quick, test_state_disabled)
+      ; ("enabled", `Quick, test_state_enabled)
+      ; ("forced", `Quick, test_state_forced)
       ]
     )
   ]
