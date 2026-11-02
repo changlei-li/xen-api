@@ -2198,44 +2198,57 @@ let assert_filename_is hdr =
     raise (IFailure (Unexpected_file (expected, actual)))
   )
 
-(* We want to read tar headers from a file descriptor (possibly a socket/pipe),
-   and retry with decompression if that fails.
-   To be able to do that we store the first block that we read, and try to parse it with Tar first,
-   and if that fails try zstd/gzip.
+(* We read tar headers from a file descriptor that may be a socket or a pipe,
+   so it cannot be rewound. To still support gzip/zstd archives we first peek
+   the opening block: if it parses as a tar header the stream is uncompressed;
+   otherwise we feed the peeked bytes, followed by the rest of the fd, through a
+   decompressor and try again.
 
-   We need a Tar HeaderReader that reads either from a buffer, and then continues reading from an FD
-*)
-module BufferOrFile = struct
+   [Peekable] is the small reader that makes this possible. It plugs into
+   [Tar.HeaderReader] (so the library parses the header through it) while
+   keeping a peeked prefix that is replayed before reading further from the fd,
+   and remembering whether anything past that prefix has been consumed (once it
+   has, the stream can no longer be rewound to try decompression). *)
+module Peekable = struct
   type in_channel = {
-      mutable buffer: Cstruct.t option
-    ; fd: Unix.file_descr
-    ; retry_with_compression: bool ref
+      fd: Unix.file_descr
+    ; mutable prefix: Cstruct.t  (** peeked bytes not yet replayed *)
+    ; mutable read_past_prefix: bool
+          (** set once a byte beyond [prefix] has been read from [fd] *)
   }
 
   type 'a t = 'a
 
-  let make retry_with_compression buffer fd =
-    {buffer= Some buffer; retry_with_compression; fd}
+  let create fd = {fd; prefix= Cstruct.empty; read_past_prefix= false}
+
+  (* Read [n] bytes off [fd], keep them as the prefix to be replayed by
+     [really_read], and return them for the caller to inspect (sniff the
+     compression magic) and, if needed, replay into a decompressor. *)
+  let peek t n =
+    let buf = Cstruct.create n in
+    Tar_unix.really_read t.fd buf ;
+    t.prefix <- buf ;
+    buf
 
   let really_read t dest =
-    match t.buffer with
-    | Some first ->
-        t.buffer <- None ;
-        assert (Cstruct.length dest = Cstruct.length first) ;
-        Cstruct.blit first 0 dest 0 (Cstruct.length first)
-    | None ->
-        (* if we've successfully parsed the first block as a tar header, then don't retry:
-           we are going to read more from the file anyway.
-        *)
-        t.retry_with_compression := false ;
-        Tar_unix.really_read t.fd dest
+    let want = Cstruct.length dest in
+    let from_prefix = min want (Cstruct.length t.prefix) in
+    if from_prefix > 0 then (
+      Cstruct.blit t.prefix 0 dest 0 from_prefix ;
+      t.prefix <- Cstruct.shift t.prefix from_prefix
+    ) ;
+    let remaining = want - from_prefix in
+    if remaining > 0 then (
+      t.read_past_prefix <- true ;
+      Tar_unix.really_read t.fd (Cstruct.sub dest from_prefix remaining)
+    )
 
   let skip t n =
-    assert (Option.is_none t.buffer) ;
     (* while reading headers we only skip small distances *)
     let buf = Cstruct.create n in
-    (* can't seek, because the FD might be a socket/pipe *)
-    Tar_unix.really_read t.fd buf
+    really_read t buf
+
+  let read_past_prefix t = t.read_past_prefix
 end
 
 module Direct = struct
@@ -2246,83 +2259,84 @@ module Direct = struct
   let return x = x
 end
 
-module TarHeaderReader = Tar.HeaderReader (Direct) (BufferOrFile)
+module TarHeaderReader = Tar.HeaderReader (Direct) (Peekable)
 
 (** Takes an fd and a function, tries first to read the first tar block
     and checks for the existence of 'ova.xml'. If that fails then pipe
     the lot through an appropriate decompressor and try again *)
 let with_open_archive fd ?length f =
-  (* Read the first header's worth into a buffer *)
-  let buffer = Cstruct.create Tar.Header.length in
-  let retry_with_compression = ref true in
-  try
-    Tar_unix.really_read fd buffer ;
-    (* we assume the first block is not all zeroes *)
-    let hdr =
-      TarHeaderReader.read (BufferOrFile.make retry_with_compression buffer fd)
-      |> Result.get_ok
-    in
-    assert_filename_is hdr ;
-    (* successfully opened uncompressed stream *)
-    retry_with_compression := false ;
-    let xml = read_xml hdr fd in
-    Tar_helpers.skip fd (Tar.Header.compute_zero_padding_length hdr) ;
-    f xml fd
-  with e ->
-    if not !retry_with_compression then raise e ;
-    let decompress =
-      (* If the file starts with the zstd magic string decompress with zstd;
-         otherwise fall back to trying gzip. *)
-      let zstd_magic = "\x28\xb5\x2f\xfd" in
-      let zstd =
-        Cstruct.equal
-          (Cstruct.of_string zstd_magic)
-          (Cstruct.sub buffer 0 (String.length zstd_magic))
+  let ic = Peekable.create fd in
+  (* Peek the opening block so we can decide uncompressed vs compressed without
+     losing it on a non-seekable stream. *)
+  let first = Peekable.peek ic Tar.Header.length in
+  (* Try to parse it as a tar header. If that fails before anything past the
+     peeked block has been consumed, the stream is probably compressed. *)
+  let hdr =
+    try Some (TarHeaderReader.read ic |> Result.get_ok)
+    with _ when not (Peekable.read_past_prefix ic) -> None
+  in
+  match hdr with
+  | Some hdr ->
+      (* uncompressed stream *)
+      assert_filename_is hdr ;
+      let xml = read_xml hdr fd in
+      Tar_helpers.skip fd (Tar.Header.compute_zero_padding_length hdr) ;
+      f xml fd
+  | None ->
+      let decompress =
+        (* If the file starts with the zstd magic string decompress with zstd;
+           otherwise fall back to trying gzip. *)
+        let zstd_magic = "\x28\xb5\x2f\xfd" in
+        let zstd =
+          Cstruct.equal
+            (Cstruct.of_string zstd_magic)
+            (Cstruct.sub first 0 (String.length zstd_magic))
+        in
+        if zstd then (
+          debug "Failed to directly open the archive; trying zstd" ;
+          Zstd.Default.decompress
+        ) else (
+          debug "Failed to directly open the archive; trying gzip" ;
+          Gzip.Default.decompress
+        )
       in
-      if zstd then (
-        debug "Failed to directly open the archive; trying zstd" ;
-        Zstd.Default.decompress
-      ) else (
-        debug "Failed to directly open the archive; trying gzip" ;
-        Gzip.Default.decompress
-      )
-    in
-    let feeder pipe_in =
-      finally
-        (fun () ->
-          decompress pipe_in (fun compressed_in ->
-              (* Write the initial buffer *)
-              Unix.set_close_on_exec compressed_in ;
-              debug "Writing initial buffer" ;
-              Tar_unix.really_write compressed_in buffer ;
-              let limit =
-                Option.map
-                  (fun x -> Int64.sub x (Int64.of_int Tar.Header.length))
-                  length
-              in
-              let n = Unixext.copy_file ?limit fd compressed_in in
-              debug "Written a total of %d + %Ld bytes" Tar.Header.length n
+      let feeder pipe_in =
+        finally
+          (fun () ->
+            decompress pipe_in (fun compressed_in ->
+                (* Replay the peeked prefix, then stream the rest of the fd. *)
+                Unix.set_close_on_exec compressed_in ;
+                debug "Writing initial buffer" ;
+                Tar_unix.really_write compressed_in first ;
+                let limit =
+                  Option.map
+                    (fun x -> Int64.sub x (Int64.of_int Tar.Header.length))
+                    length
+                in
+                let n = Unixext.copy_file ?limit fd compressed_in in
+                debug "Written a total of %d + %Ld bytes" Tar.Header.length n
+            )
           )
-        )
-        (fun () -> ignore_exn (fun () -> Unix.close pipe_in))
-    in
-    let consumer pipe_out feeder_t =
-      finally
-        (fun () ->
-          let hdr = Tar_unix.get_next_header pipe_out in
-          assert_filename_is hdr ;
-          let xml = read_xml hdr pipe_out in
-          Tar_helpers.skip pipe_out (Tar.Header.compute_zero_padding_length hdr) ;
-          f xml pipe_out
-        )
-        (fun () ->
-          ignore_exn (fun () -> Unix.close pipe_out) ;
-          Thread.join feeder_t
-        )
-    in
-    let pipe_out, pipe_in = Unix.pipe () in
-    let feeder_t = Thread.create feeder pipe_in in
-    consumer pipe_out feeder_t
+          (fun () -> ignore_exn (fun () -> Unix.close pipe_in))
+      in
+      let consumer pipe_out feeder_t =
+        finally
+          (fun () ->
+            let hdr = Tar_unix.get_next_header pipe_out in
+            assert_filename_is hdr ;
+            let xml = read_xml hdr pipe_out in
+            Tar_helpers.skip pipe_out
+              (Tar.Header.compute_zero_padding_length hdr) ;
+            f xml pipe_out
+          )
+          (fun () ->
+            ignore_exn (fun () -> Unix.close pipe_out) ;
+            Thread.join feeder_t
+          )
+      in
+      let pipe_out, pipe_in = Unix.pipe () in
+      let feeder_t = Thread.create feeder pipe_in in
+      consumer pipe_out feeder_t
 
 (** Remove "import" from the current operations of all created VMs, complete the
     task including the VM references *)
