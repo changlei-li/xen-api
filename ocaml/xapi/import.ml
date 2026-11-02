@@ -2215,11 +2215,15 @@ module Peekable = struct
     ; mutable prefix: Cstruct.t  (** peeked bytes not yet replayed *)
     ; mutable read_past_prefix: bool
           (** set once a byte beyond [prefix] has been read from [fd] *)
+    ; mutable bytes_read_from_fd: int
+          (** total bytes pulled off [fd] (the peek, plus reads past the
+              prefix); lets a caller drain the rest of a fixed-length body *)
   }
 
   type 'a t = 'a
 
-  let create fd = {fd; prefix= Cstruct.empty; read_past_prefix= false}
+  let create fd =
+    {fd; prefix= Cstruct.empty; read_past_prefix= false; bytes_read_from_fd= 0}
 
   (* Read [n] bytes off [fd], keep them as the prefix to be replayed by
      [really_read], and return them for the caller to inspect (sniff the
@@ -2228,6 +2232,7 @@ module Peekable = struct
     let buf = Cstruct.create n in
     Tar_unix.really_read t.fd buf ;
     t.prefix <- buf ;
+    t.bytes_read_from_fd <- t.bytes_read_from_fd + n ;
     buf
 
   let really_read t dest =
@@ -2240,6 +2245,7 @@ module Peekable = struct
     let remaining = want - from_prefix in
     if remaining > 0 then (
       t.read_past_prefix <- true ;
+      t.bytes_read_from_fd <- t.bytes_read_from_fd + remaining ;
       Tar_unix.really_read t.fd (Cstruct.sub dest from_prefix remaining)
     )
 
@@ -2249,6 +2255,8 @@ module Peekable = struct
     really_read t buf
 
   let read_past_prefix t = t.read_past_prefix
+
+  let bytes_read_from_fd t = t.bytes_read_from_fd
 end
 
 module Direct = struct
@@ -2264,7 +2272,7 @@ module TarHeaderReader = Tar.HeaderReader (Direct) (Peekable)
 (** Takes an fd and a function, tries first to read the first tar block
     and checks for the existence of 'ova.xml'. If that fails then pipe
     the lot through an appropriate decompressor and try again *)
-let with_open_archive fd ?length f =
+let with_open_archive fd ?length ?(drain = false) f =
   let ic = Peekable.create fd in
   (* Peek the opening block so we can decide uncompressed vs compressed without
      losing it on a non-seekable stream. *)
@@ -2280,8 +2288,33 @@ let with_open_archive fd ?length f =
       (* uncompressed stream *)
       assert_filename_is hdr ;
       let xml = read_xml hdr fd in
-      Tar_helpers.skip fd (Tar.Header.compute_zero_padding_length hdr) ;
-      f xml fd
+      let zero_pad = Tar.Header.compute_zero_padding_length hdr in
+      Tar_helpers.skip fd zero_pad ;
+      let result = f xml fd in
+      ( match (length, drain) with
+      | Some len, true -> (
+          (* Consume whatever is left of the request body after [f] returns (the
+             tar end-of-archive markers and the trailing record padding) so the
+             whole Content-Length is read off the socket and the connection
+             closes cleanly, instead of the client getting EPIPE while still
+             sending the padding. Only valid when [f] does not read from the
+             archive after ova.xml. [Peekable.bytes_read_from_fd] is the bytes
+             actually taken off [fd] for the header. The compressed path does
+             not need this: its feeder thread already reads the whole body off
+             [fd]. *)
+          let consumed =
+            Peekable.bytes_read_from_fd ic
+            + Int64.to_int hdr.Tar.Header.file_size
+            + zero_pad
+          in
+          let remaining = Int64.to_int len - consumed in
+          if remaining > 0 then
+            try Tar_helpers.skip fd remaining with End_of_file -> ()
+        )
+      | _ ->
+          ()
+      ) ;
+      result
   | None ->
       let decompress =
         (* If the file starts with the zstd magic string decompress with zstd;
@@ -2477,11 +2510,9 @@ let metadata_handler (req : Request.t) s _ =
               ]
           in
           Http_svr.headers s headers ;
-          with_open_archive s ?length:req.Request.content_length
-            (fun metadata s ->
+          with_open_archive s ?length:req.Request.content_length ~drain:true
+            (fun metadata _s ->
               debug "Got XML" ;
-              (* Skip trailing two zero blocks *)
-              Tar_helpers.skip s (Tar.Header.length * 2) ;
               let header = metadata |> Xmlrpc.of_string |> header_of_rpc in
               assert_compatible ~__context header.version ;
               if full_restore then
