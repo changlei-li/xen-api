@@ -29,6 +29,7 @@
     rpclib.json
     rresult
     tapctl
+    tar
     tests_common
     threads.posix
     uuid
